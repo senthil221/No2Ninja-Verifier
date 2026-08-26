@@ -59,6 +59,7 @@ export default async function ClientPage({ params }: { params: { clientId: strin
                 <th>Status</th>
                 <th>Rows</th>
                 <th>Uploaded</th>
+                <th style={{ textAlign: "right" }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -77,6 +78,16 @@ export default async function ClientPage({ params }: { params: { clientId: strin
                   </td>
                   <td className="num meta">{list.totalRows}</td>
                   <td className="meta">{list.createdAt.toLocaleDateString()}</td>
+                  <td>
+                    <div className="table-actions">
+                      <a className="link-action" href={`/api/lists/${list.id}/export`}>
+                        Export
+                      </a>
+                      <Link className="link-action" href={`/lists/${list.id}`}>
+                        Manage
+                      </Link>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

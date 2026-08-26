@@ -203,9 +203,19 @@ export async function failListFromMtn(listId: string, mtnMessage: string) {
   });
 }
 
-export async function isListFailed(listId: string) {
+// True when the list is gone or stopped -- either way its queued jobs should
+// be dropped rather than processed.
+export async function isListInactive(listId: string) {
   const list = await prisma.list.findUnique({ where: { id: listId }, select: { status: true } });
-  return list?.status === "failed";
+  return list === null || list.status === "failed";
+}
+
+// Removes the prospect data (the personal data, and the point of deleting)
+// along with its rows and batches. Credit history is deliberately retained
+// -- see the CreditLedger model. Jobs still queued for this list drain
+// harmlessly via isListInactive.
+export async function deleteList(listId: string) {
+  await prisma.list.delete({ where: { id: listId } });
 }
 
 // Rows that exhausted MTN retries on a transient error also fall through to N2B.
@@ -305,8 +315,9 @@ async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmai
     },
   });
 
+  const list = await prisma.list.findUnique({ where: { id: listId }, select: { name: true } });
   await prisma.creditLedger.create({
-    data: { listId, provider: "n2b", amount: emails.length },
+    data: { listId, listName: list?.name ?? "", provider: "n2b", amount: emails.length },
   });
 
   await n2bPollQueue.add(

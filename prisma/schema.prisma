@@ -82,7 +82,7 @@ model List {
 model ListRow {
   id               String        @id @default(cuid())
   listId           String
-  list             List          @relation(fields: [listId], references: [id])
+  list             List          @relation(fields: [listId], references: [id], onDelete: Cascade)
   rawEmail         String
   normalizedEmail  String
   // Full original CSV row (all columns, keyed by header name) so uploaded
@@ -120,7 +120,7 @@ model EmailCache {
 model N2bBatch {
   id           String         @id @default(cuid())
   listId       String
-  list         List           @relation(fields: [listId], references: [id])
+  list         List           @relation(fields: [listId], references: [id], onDelete: Cascade)
   trackingId   String
   hashkey      String?
   status       N2bBatchStatus @default(submitted)
@@ -135,10 +135,15 @@ model N2bBatch {
   @@index([trackingId])
 }
 
+// Spend history outlives the list it came from. Deleting a list purges the
+// prospect data (which is personal data, and the reason to delete at all)
+// but must not rewrite what was already spent -- so listId is nullable and
+// the name is snapshotted here for reporting after the list is gone.
 model CreditLedger {
   id        String   @id @default(cuid())
-  listId    String
-  list      List     @relation(fields: [listId], references: [id])
+  listId    String?
+  list      List?    @relation(fields: [listId], references: [id], onDelete: SetNull)
+  listName  String   @default("")
   provider  Provider
   amount    Int
   createdAt DateTime @default(now())

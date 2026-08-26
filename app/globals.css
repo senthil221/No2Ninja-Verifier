@@ -517,6 +517,75 @@ a > button {
   font-size: 13.5px;
 }
 
+/* ---------- Destructive actions ---------- */
+
+.btn-danger {
+  background: var(--invalid);
+}
+
+.btn-danger:hover {
+  background: #a92c22;
+}
+
+.btn-danger-ghost {
+  background: transparent;
+  color: var(--invalid);
+  border: 1px solid var(--border-strong);
+}
+
+.btn-danger-ghost:hover {
+  background: var(--invalid-soft);
+  border-color: #eab3ac;
+}
+
+.btn-quiet {
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--border-strong);
+}
+
+.btn-quiet:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.confirm-box {
+  background: var(--invalid-soft);
+  border: 1px solid #eab3ac;
+  border-radius: var(--radius-sm);
+  padding: 16px 18px;
+  font-size: 13.5px;
+  max-width: 520px;
+}
+
+.confirm-box .meta {
+  color: #9c2e25;
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.table-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.link-action {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.link-action:hover {
+  color: var(--accent-strong);
+}
+
 .error-banner {
   background: var(--invalid-soft);
   border: 1px solid #eab3ac;

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import ListProgress from "./ListProgress";
+import DeleteListButton from "./DeleteListButton";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,20 @@ export default async function ListPage({ params }: { params: { listId: string } 
       <div className="card">
         <h2>Progress</h2>
         <ListProgress listId={list.id} />
+      </div>
+
+      <div className="card">
+        <h2>Manage</h2>
+        <div className="card-actions">
+          <a href={`/api/lists/${list.id}/export`}>
+            <button className="btn-quiet">Export CSV</button>
+          </a>
+          <DeleteListButton
+            listId={list.id}
+            listName={list.name}
+            totalRows={list.totalRows}
+          />
+        </div>
       </div>
     </>
   );

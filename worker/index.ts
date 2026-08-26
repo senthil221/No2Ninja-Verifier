@@ -8,7 +8,7 @@ import {
   recordMtnExhausted,
   pollN2bBatchOnce,
   failListFromMtn,
-  isListFailed,
+  isListInactive,
 } from "../lib/pipeline";
 
 assertProviderKeysConfigured();
@@ -37,10 +37,10 @@ const mtnWorker = new Worker<MtnVerifyJobData>(
   async (job: Job<MtnVerifyJobData>) => {
     const { listRowId, listId, email } = job.data;
 
-    // A fatal failure stops the list, but jobs already queued for it keep
-    // arriving. Skip them instead of hammering a known-bad key thousands
-    // of times.
-    if (await isListFailed(listId)) return;
+    // A stopped or deleted list keeps receiving the jobs already queued for
+    // it. Drop them rather than hammering a known-bad key thousands of
+    // times, or writing rows back to a list that no longer exists.
+    if (await isListInactive(listId)) return;
 
     const result = await mtnClient.verify(email);
     const outcome = classifyMtnMessage(result.message);
