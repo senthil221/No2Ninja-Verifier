@@ -67,6 +67,9 @@ model List {
   // reconstruct the export in the same column order the user uploaded.
   columnHeaders  String[]   @default([])
   status         ListStatus @default(pending)
+  // Set when the pipeline can't recover on its own (e.g. an API rejected
+  // the batch) so the UI can show why instead of just a bare "failed" pill.
+  lastError      String?
   createdAt      DateTime   @default(now())
   completedAt    DateTime?
   rows           ListRow[]

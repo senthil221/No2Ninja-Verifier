@@ -35,6 +35,7 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
 
   return NextResponse.json({
     status: list.status,
+    lastError: list.lastError,
     totalRows: list.totalRows,
     resolved,
     stageCounts,

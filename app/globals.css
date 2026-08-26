@@ -517,6 +517,20 @@ a > button {
   font-size: 13.5px;
 }
 
+.error-banner {
+  background: var(--invalid-soft);
+  border: 1px solid #eab3ac;
+  color: var(--invalid);
+  padding: 14px 18px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+  font-size: 13.5px;
+}
+
+.error-banner .meta {
+  color: #9c2e25;
+}
+
 .back-link {
   display: inline-block;
   color: var(--ink-muted);

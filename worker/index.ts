@@ -7,6 +7,16 @@ import { recordMtnResult, recordMtnExhausted, pollN2bBatchOnce } from "../lib/pi
 
 assertProviderKeysConfigured();
 
+// Last line of defense: an uncaught error anywhere should be logged, not
+// silently take down a process that may be mid-way through thousands of
+// rows across multiple clients' lists.
+process.on("unhandledRejection", (reason) => {
+  console.error("[worker] unhandled rejection", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[worker] uncaught exception", err);
+});
+
 class TransientMtnError extends Error {
   constructor(
     public mtnStatus: string,
@@ -47,22 +57,30 @@ mtnWorker.on("failed", async (job, err) => {
   const isLastAttempt = job.attemptsMade >= (job.opts.attempts ?? 1);
   if (!isLastAttempt) return;
 
-  if (err instanceof TransientMtnError) {
-    await recordMtnExhausted({
-      listRowId: job.data.listRowId,
-      listId: job.data.listId,
-      mtnStatus: err.mtnStatus,
-      mtnMessage: err.mtnMessage,
-    });
-  } else {
-    // Unexpected failure (network blip, etc.) after exhausting retries —
-    // still needs to fall through to N2B rather than leaving the row stuck.
-    await recordMtnExhausted({
-      listRowId: job.data.listRowId,
-      listId: job.data.listId,
-      mtnStatus: "error",
-      mtnMessage: err.message,
-    });
+  // BullMQ does not await or catch this listener's promise -- an unhandled
+  // rejection here becomes a process-level unhandledRejection, which by
+  // default crashes the whole worker (and every list it's processing, not
+  // just this row). Everything below must never throw past this point.
+  try {
+    if (err instanceof TransientMtnError) {
+      await recordMtnExhausted({
+        listRowId: job.data.listRowId,
+        listId: job.data.listId,
+        mtnStatus: err.mtnStatus,
+        mtnMessage: err.mtnMessage,
+      });
+    } else {
+      // Unexpected failure (network blip, etc.) after exhausting retries —
+      // still needs to fall through to N2B rather than leaving the row stuck.
+      await recordMtnExhausted({
+        listRowId: job.data.listRowId,
+        listId: job.data.listId,
+        mtnStatus: "error",
+        mtnMessage: err.message,
+      });
+    }
+  } catch (handlerErr) {
+    console.error("[worker:mtn-verify] failed to record exhausted row", handlerErr);
   }
 });
 

@@ -234,7 +234,19 @@ async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmai
   const emails = rows.map((r) => r.normalizedEmail);
   const hashkey = randomBytes(16).toString("hex");
 
-  const { trackingId } = await n2bClient.submitBulk(emails, hashkey);
+  let trackingId: string;
+  try {
+    ({ trackingId } = await n2bClient.submitBulk(emails, hashkey));
+  } catch (err) {
+    // A rejected/failed API call must never take the whole worker process
+    // down with it -- fail just this list and keep processing everything
+    // else.
+    await prisma.list.update({
+      where: { id: listId },
+      data: { status: "failed", lastError: err instanceof Error ? err.message : String(err) },
+    });
+    return;
+  }
 
   const batch = await prisma.n2bBatch.create({
     data: {
@@ -279,14 +291,25 @@ export async function pollN2bBatchOnce(batchId: string) {
       where: { id: batchId },
       data: { status: "failed", error: result.error },
     });
-    await prisma.list.update({ where: { id: batch.listId }, data: { status: "failed" } });
+    await prisma.list.update({
+      where: { id: batch.listId },
+      data: { status: "failed", lastError: result.error },
+    });
     return;
   }
 
-  const rows: N2bRowResult[] =
-    result.state === "complete_inline"
-      ? result.rows
-      : await n2bClient.fetchSignedUrlResults(result.signedUrl);
+  let rows: N2bRowResult[];
+  try {
+    rows =
+      result.state === "complete_inline"
+        ? result.rows
+        : await n2bClient.fetchSignedUrlResults(result.signedUrl);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await prisma.n2bBatch.update({ where: { id: batchId }, data: { status: "failed", error: message } });
+    await prisma.list.update({ where: { id: batch.listId }, data: { status: "failed", lastError: message } });
+    return;
+  }
 
   await applyN2bResults(batch.listId, batchId, rows, result.state === "complete_signed_url" ? result.signedUrl : undefined);
 }

@@ -5,6 +5,7 @@ import { approveList } from "@/app/actions";
 
 interface StatusPayload {
   status: string;
+  lastError: string | null;
   totalRows: number;
   resolved: number;
   stageCounts: Record<string, number>;
@@ -120,6 +121,13 @@ export default function ListProgress({ listId }: { listId: string }) {
               {approving ? "Submitting…" : "Approve N2B submission"}
             </button>
           </div>
+        </div>
+      )}
+
+      {data.status === "failed" && (
+        <div className="error-banner" style={{ marginTop: 20 }}>
+          This list failed and won't retry automatically.
+          {data.lastError && <div className="meta" style={{ marginTop: 4 }}>{data.lastError}</div>}
         </div>
       )}
 
