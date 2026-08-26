@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
-import { ingestList, approveN2bSubmission } from "@/lib/pipeline";
+import { ingestList, approveN2bSubmission, retryList } from "@/lib/pipeline";
 
 export async function createClient(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
@@ -32,5 +32,10 @@ export async function uploadList(clientId: string, formData: FormData) {
 
 export async function approveList(listId: string) {
   await approveN2bSubmission(listId);
+  revalidatePath(`/lists/${listId}`);
+}
+
+export async function retryFailedList(listId: string) {
+  await retryList(listId);
   revalidatePath(`/lists/${listId}`);
 }

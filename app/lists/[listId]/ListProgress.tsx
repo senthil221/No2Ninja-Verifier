@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { approveList } from "@/app/actions";
+import { approveList, retryFailedList } from "@/app/actions";
 
 interface StatusPayload {
   status: string;
@@ -27,6 +27,7 @@ const STATUS_ORDER = ["valid", "invalid", "risky", "unknown"];
 export default function ListProgress({ listId }: { listId: string }) {
   const [data, setData] = useState<StatusPayload | null>(null);
   const [approving, setApproving] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,14 +127,32 @@ export default function ListProgress({ listId }: { listId: string }) {
 
       {data.status === "failed" && (
         <div className="error-banner" style={{ marginTop: 20 }}>
-          This list failed and won't retry automatically.
+          This list stopped before finishing.
           {data.lastError && <div className="meta" style={{ marginTop: 4 }}>{data.lastError}</div>}
+          <div className="meta" style={{ marginTop: 8 }}>
+            Results already verified are kept — retrying resumes from where it stopped and
+            re-checks nothing you've already paid for.
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <button
+              disabled={retrying}
+              onClick={async () => {
+                setRetrying(true);
+                await retryFailedList(listId);
+                setRetrying(false);
+              }}
+            >
+              {retrying ? "Retrying…" : "Retry"}
+            </button>
+          </div>
         </div>
       )}
 
-      {data.status === "completed" && (
-        <a href={`/api/lists/${listId}/export`} style={{ display: "inline-block", marginTop: 20 }}>
-          <button>Download results CSV</button>
+      {(data.status === "completed" || data.status === "failed") && (
+        <a href={`/api/lists/${listId}/export`} style={{ display: "inline-block", marginTop: 12 }}>
+          <button>
+            {data.status === "completed" ? "Download results CSV" : "Download partial results"}
+          </button>
         </a>
       )}
     </div>

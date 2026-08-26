@@ -20,20 +20,30 @@ export interface MtnResult {
 //                       expensive provider and silently burn 20k credits.
 export type MtnOutcome = "valid" | "invalid" | "transient" | "ambiguous" | "fatal";
 
+// Keyed on the normalized message (see normalize below). The docs and the
+// live API disagree on casing -- docs say "No Mx"/"Mx Error", the API
+// actually sends "No MX"/"MX Error" -- so never match these literally.
+// Getting this wrong is expensive: an unmatched message falls through to
+// "transient", which retries and then escalates a row that MTN had already
+// answered definitively, paying the expensive provider for nothing.
 const MESSAGE_OUTCOME: Record<string, MtnOutcome> = {
-  Accepted: "valid",
-  Limited: "valid",
-  Rejected: "invalid",
-  "No Mx": "invalid",
-  "Catch-All": "ambiguous",
-  "Mx Error": "transient",
-  Timeout: "transient",
-  "SPAM Block": "transient",
-  "Disabled Key": "fatal",
+  accepted: "valid",
+  limited: "valid",
+  rejected: "invalid",
+  "no mx": "invalid",
+  "catch-all": "ambiguous",
+  "mx error": "transient",
+  timeout: "transient",
+  "spam block": "transient",
+  "disabled key": "fatal",
 };
 
+function normalize(message: string): string {
+  return message.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 export function classifyMtnMessage(message: string): MtnOutcome {
-  const known = MESSAGE_OUTCOME[message];
+  const known = MESSAGE_OUTCOME[normalize(message)];
   if (known) return known;
 
   // Undocumented account-level failures ("Invalid Key", "Quota Exceeded",

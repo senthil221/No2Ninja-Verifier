@@ -121,6 +121,35 @@ async function enqueuePendingRows(listId: string) {
   );
 }
 
+// Resume a list that stopped partway (a provider outage, a bad key that has
+// since been fixed). Picks up from whatever stage each row actually reached,
+// so already-verified rows are never re-checked or re-paid for.
+export async function retryList(listId: string) {
+  await prisma.list.update({ where: { id: listId }, data: { lastError: null } });
+
+  const stillPending = await prisma.listRow.count({ where: { listId, stage: "pending" } });
+  if (stillPending > 0) {
+    await enqueuePendingRows(listId);
+    return;
+  }
+
+  const needsN2b = await prisma.listRow.findMany({
+    where: { listId, stage: "needs_n2b" },
+    select: { id: true, normalizedEmail: true },
+  });
+
+  if (needsN2b.length === 0) {
+    await prisma.list.update({
+      where: { id: listId },
+      data: { status: "completed", completedAt: new Date() },
+    });
+    return;
+  }
+
+  await prisma.list.update({ where: { id: listId }, data: { status: "running_n2b" } });
+  await submitN2bBatch(listId, needsN2b);
+}
+
 // ---------- MTN pass resolution ----------
 
 export async function recordMtnResult(params: {
