@@ -18,6 +18,11 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+# Next's standalone server binds to $HOSTNAME if set, and Docker auto-sets
+# HOSTNAME to the container ID -- which only resolves on one of the two
+# networks this container joins (its own + Traefik's). Force it to bind
+# every interface instead of just one.
+ENV HOSTNAME=0.0.0.0
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
