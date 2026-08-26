@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ListStatus {
+  pending
+  running_mtn
+  running_n2b
+  needs_approval
+  completed
+  failed
+}
+
+enum RowStage {
+  pending
+  cache_hit
+  mtn_done
+  needs_n2b
+  n2b_done
+}
+
+enum FinalStatus {
+  valid
+  invalid
+  risky
+  unknown
+}
+
+enum ResultSource {
+  cache
+  mtn
+  n2b
+}
+
+enum Provider {
+  mtn
+  n2b
+}
+
+enum N2bBatchStatus {
+  submitted
+  polling
+  completed
+  failed
+}
+
+model Client {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  lists     List[]
+}
+
+model List {
+  id             String     @id @default(cuid())
+  clientId       String
+  client         Client     @relation(fields: [clientId], references: [id])
+  name           String
+  sourceFileName String
+  totalRows      Int        @default(0)
+  status         ListStatus @default(pending)
+  createdAt      DateTime   @default(now())
+  completedAt    DateTime?
+  rows           ListRow[]
+  n2bBatches     N2bBatch[]
+  creditEntries  CreditLedger[]
+
+  @@index([clientId])
+}
+
+model ListRow {
+  id               String        @id @default(cuid())
+  listId           String
+  list             List          @relation(fields: [listId], references: [id])
+  rawEmail         String
+  normalizedEmail  String
+  stage            RowStage      @default(pending)
+  mtnStatus        String?
+  mtnMessage       String?
+  mtnAttempts      Int           @default(0)
+  mtnCheckedAt     DateTime?
+  n2bStatus        String?
+  n2bCheckedAt     DateTime?
+  finalStatus      FinalStatus?
+  finalSource      ResultSource?
+  createdAt        DateTime      @default(now())
+
+  @@index([listId])
+  @@index([normalizedEmail])
+  @@index([listId, stage])
+}
+
+// Global cache keyed by email address — deliverability is a property of the
+// address, not of any one client's list, so this is intentionally shared
+// across all clients to maximize N2B credit savings.
+model EmailCache {
+  normalizedEmail  String    @id
+  lastMtnResult    String?
+  lastMtnCheckedAt DateTime?
+  lastN2bResult    String?
+  lastN2bCheckedAt DateTime?
+  updatedAt        DateTime  @updatedAt
+}
+
+model N2bBatch {
+  id           String         @id @default(cuid())
+  listId       String
+  list         List           @relation(fields: [listId], references: [id])
+  trackingId   String
+  hashkey      String?
+  status       N2bBatchStatus @default(submitted)
+  emailCount   Int
+  resultUrl    String?
+  submittedAt  DateTime       @default(now())
+  completedAt  DateTime?
+  lastPolledAt DateTime?
+  error        String?
+
+  @@index([listId])
+  @@index([trackingId])
+}
+
+model CreditLedger {
+  id        String   @id @default(cuid())
+  listId    String
+  list      List     @relation(fields: [listId], references: [id])
+  provider  Provider
+  amount    Int
+  createdAt DateTime @default(now())
+
+  @@index([listId])
+}
