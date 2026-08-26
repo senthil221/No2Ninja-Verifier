@@ -1,0 +1,31 @@
+# Optional overlay: routes the app through an existing Traefik instance
+# (e.g. one already fronting n8n on the same host) instead of publishing
+# port 3000 directly on the VPS.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+#
+# Requires these set in .env:
+#   DOMAIN_NAME        - base domain Traefik already has certs for (e.g. srv12345.hstgr.cloud)
+#   VERIFIER_SUBDOMAIN - subdomain for this app (default: verifier)
+#   TRAEFIK_NETWORK    - the external Docker network Traefik's containers are on
+#   TLS_CERTRESOLVER   - Traefik certresolver name configured on that Traefik instance
+
+services:
+  app:
+    networks:
+      - default
+      - traefik_net
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-root_default}
+      - traefik.http.routers.verifier.rule=Host(`${VERIFIER_SUBDOMAIN:-verifier}.${DOMAIN_NAME}`)
+      - traefik.http.routers.verifier.tls=true
+      - traefik.http.routers.verifier.entrypoints=web,websecure
+      - traefik.http.routers.verifier.tls.certresolver=${TLS_CERTRESOLVER:-mytlschallenge}
+      - traefik.http.services.verifier.loadbalancer.server.port=3000
+
+networks:
+  traefik_net:
+    external: true
+    name: ${TRAEFIK_NETWORK:-root_default}
