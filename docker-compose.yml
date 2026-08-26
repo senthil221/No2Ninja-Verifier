@@ -8,12 +8,22 @@ services:
       POSTGRES_DB: verifier
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verifier -d verifier"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
 
   # One-shot: applies Prisma migrations, then exits. app/worker wait for it.
   migrate:
@@ -23,7 +33,8 @@ services:
       target: builder
     env_file: .env
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     command: ["npx", "prisma", "migrate", "deploy"]
 
   app:
@@ -34,9 +45,9 @@ services:
     env_file: .env
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
@@ -48,9 +59,9 @@ services:
     env_file: .env
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
