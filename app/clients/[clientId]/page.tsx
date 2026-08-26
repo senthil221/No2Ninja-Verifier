@@ -25,41 +25,62 @@ export default async function ClientPage({ params }: { params: { clientId: strin
 
   return (
     <>
+      <Link href="/" className="back-link">
+        &larr; All clients
+      </Link>
+      <span className="eyebrow">Client</span>
       <h1>{client.name}</h1>
       <p className="subtitle">Prospect lists for this client.</p>
 
-      <div className="panel">
+      <div className="card">
         <h2>Upload a list</h2>
         <form action={uploadForClient}>
           <div className="field">
-            <input type="text" name="name" placeholder="List name (optional)" />
+            <label htmlFor="name">List name</label>
+            <input type="text" id="name" name="name" placeholder="Optional — defaults to filename" />
           </div>
           <div className="field">
-            <input type="file" name="file" accept=".csv" required />
+            <label htmlFor="file">CSV file</label>
+            <input type="file" id="file" name="file" accept=".csv" required />
           </div>
           <button type="submit">Upload &amp; start verification</button>
         </form>
       </div>
 
-      <div className="panel">
+      <div className="card">
         <h2>Lists</h2>
         {client.lists.length === 0 ? (
-          <p className="meta">No lists uploaded yet.</p>
+          <p className="empty-state">No lists uploaded yet.</p>
         ) : (
-          <ul className="row-list">
-            {client.lists.map((list) => (
-              <li key={list.id}>
-                <Link href={`/lists/${list.id}`}>{list.name}</Link>
-                <span className={`badge badge-${list.status}`} style={{ marginLeft: 10 }}>
-                  {STATUS_LABEL[list.status] ?? list.status}
-                </span>
-                <div className="meta">
-                  {list.totalRows} rows &middot; uploaded{" "}
-                  {list.createdAt.toLocaleString()}
-                </div>
-              </li>
-            ))}
-          </ul>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Rows</th>
+                <th>Uploaded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {client.lists.map((list) => (
+                <tr key={list.id}>
+                  <td>
+                    <Link href={`/lists/${list.id}`} className="row-link">
+                      {list.name}
+                    </Link>
+                  </td>
+                  <td>
+                    <span className={`pill pill-${list.status}`}>
+                      <span className="pill-dot" />
+                      {STATUS_LABEL[list.status] ?? list.status}
+                    </span>
+                  </td>
+                  <td className="num meta">{list.totalRows}</td>
+                  <td className="meta">{list.createdAt.toLocaleDateString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
     </>

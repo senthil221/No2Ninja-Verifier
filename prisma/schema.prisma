@@ -63,6 +63,9 @@ model List {
   name           String
   sourceFileName String
   totalRows      Int        @default(0)
+  // Original CSV header names, in original order, minus nothing -- used to
+  // reconstruct the export in the same column order the user uploaded.
+  columnHeaders  String[]   @default([])
   status         ListStatus @default(pending)
   createdAt      DateTime   @default(now())
   completedAt    DateTime?
@@ -79,6 +82,10 @@ model ListRow {
   list             List          @relation(fields: [listId], references: [id])
   rawEmail         String
   normalizedEmail  String
+  // Full original CSV row (all columns, keyed by header name) so uploaded
+  // prospect data (name, company, etc.) survives the pipeline and comes
+  // back on export -- not just a bare email/status pair.
+  rawRow           Json          @default("{}")
   stage            RowStage      @default(pending)
   mtnStatus        String?
   mtnMessage       String?

@@ -15,12 +15,13 @@ interface StatusPayload {
 }
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "needs_approval"]);
-const STATUS_COLORS: Record<string, string> = {
-  valid: "var(--valid)",
-  invalid: "var(--invalid)",
-  risky: "var(--risky)",
-  unknown: "var(--unknown)",
+const STATUS_COLOR_VAR: Record<string, string> = {
+  valid: "--valid",
+  invalid: "--invalid",
+  risky: "--risky",
+  unknown: "--unknown",
 };
+const STATUS_ORDER = ["valid", "invalid", "risky", "unknown"];
 
 export default function ListProgress({ listId }: { listId: string }) {
   const [data, setData] = useState<StatusPayload | null>(null);
@@ -48,59 +49,65 @@ export default function ListProgress({ listId }: { listId: string }) {
     };
   }, [listId]);
 
-  if (!data) return <p className="meta">Loading progress…</p>;
+  if (!data) return <p className="empty-state">Loading progress…</p>;
 
   const pct = data.totalRows > 0 ? Math.round((data.resolved / data.totalRows) * 100) : 0;
+  const orderedStatuses = STATUS_ORDER.filter((s) => data.byFinalStatus[s]);
 
   return (
     <div>
-      <div className="progress-bar">
-        {Object.entries(data.byFinalStatus).map(([status, count]) => (
-          <span
-            key={status}
-            style={{
-              width: `${(count / data.totalRows) * 100}%`,
-              background: STATUS_COLORS[status] ?? "var(--unknown)",
-            }}
-          />
-        ))}
-      </div>
-      <div className="meta">
-        {data.resolved} / {data.totalRows} resolved ({pct}%)
-      </div>
-
-      <div className="stat-grid">
-        {Object.entries(data.byFinalStatus).map(([status, count]) => (
-          <div className="stat" key={status}>
-            <div className="value">{count}</div>
-            <div className="label">{status}</div>
+      <div className="legend">
+        {orderedStatuses.map((status) => (
+          <div className="legend-item" key={status}>
+            <span
+              className="legend-dot"
+              style={{ background: `var(${STATUS_COLOR_VAR[status]})` }}
+            />
+            <span className="num">{data.byFinalStatus[status]}</span> {status}
           </div>
         ))}
       </div>
 
-      <div className="stat-grid">
+      <div className="progress-track">
+        {orderedStatuses.map((status) => (
+          <span
+            key={status}
+            style={{
+              width: `${(data.byFinalStatus[status]! / data.totalRows) * 100}%`,
+              background: `var(${STATUS_COLOR_VAR[status]})`,
+            }}
+          />
+        ))}
+      </div>
+      <p className="meta">
+        <span className="num">{data.resolved}</span> / <span className="num">{data.totalRows}</span> resolved
+        (<span className="num">{pct}</span>%)
+      </p>
+
+      <div className="stat-row">
         <div className="stat">
-          <div className="value">{data.bySource.cache ?? 0}</div>
-          <div className="label">from cache</div>
+          <span className="value num">{data.bySource.cache ?? 0}</span>
+          <span className="label">From cache</span>
         </div>
         <div className="stat">
-          <div className="value">{data.bySource.mtn ?? 0}</div>
-          <div className="label">from MTN</div>
+          <span className="value num">{data.bySource.mtn ?? 0}</span>
+          <span className="label">From MTN</span>
         </div>
         <div className="stat">
-          <div className="value">{data.bySource.n2b ?? 0}</div>
-          <div className="label">from N2B</div>
+          <span className="value num">{data.bySource.n2b ?? 0}</span>
+          <span className="label">From N2B</span>
         </div>
         <div className="stat">
-          <div className="value">{data.n2bCreditsSpent}</div>
-          <div className="label">N2B credits</div>
+          <span className="value num">{data.n2bCreditsSpent}</span>
+          <span className="label">N2B credits</span>
         </div>
       </div>
 
       {data.status === "needs_approval" && (
-        <div className="warning">
+        <div className="warning" style={{ marginTop: 20 }}>
           This list's Pass 2 (NeverBounce) batch would exceed the configured single-list credit
-          cap ({data.stageCounts.needs_n2b ?? 0} rows pending). Approve to proceed.
+          cap (<span className="num">{data.stageCounts.needs_n2b ?? 0}</span> rows pending).
+          Approve to proceed.
           <div style={{ marginTop: 10 }}>
             <button
               disabled={approving}
@@ -117,7 +124,7 @@ export default function ListProgress({ listId }: { listId: string }) {
       )}
 
       {data.status === "completed" && (
-        <a href={`/api/lists/${listId}/export`}>
+        <a href={`/api/lists/${listId}/export`} style={{ display: "inline-block", marginTop: 20 }}>
           <button>Download results CSV</button>
         </a>
       )}

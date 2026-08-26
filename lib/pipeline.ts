@@ -14,8 +14,8 @@ export async function ingestList(params: {
   sourceFileName: string;
   fileContents: string;
 }) {
-  const parsed = parseEmailCsv(params.fileContents);
-  if (parsed.length === 0) {
+  const { headers, rows } = parseEmailCsv(params.fileContents);
+  if (rows.length === 0) {
     throw new Error("No valid email rows found in the uploaded file");
   }
 
@@ -24,16 +24,18 @@ export async function ingestList(params: {
       clientId: params.clientId,
       name: params.name,
       sourceFileName: params.sourceFileName,
-      totalRows: parsed.length,
+      totalRows: rows.length,
+      columnHeaders: headers,
       status: "pending",
     },
   });
 
   await prisma.listRow.createMany({
-    data: parsed.map((p) => ({
+    data: rows.map((p) => ({
       listId: list.id,
       rawEmail: p.rawEmail,
       normalizedEmail: p.normalizedEmail,
+      rawRow: p.rawRow,
     })),
   });
 

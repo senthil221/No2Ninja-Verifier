@@ -14,15 +14,16 @@ export default async function ListPage({ params }: { params: { listId: string } 
 
   return (
     <>
-      <Link href={`/clients/${list.clientId}`} className="meta">
+      <Link href={`/clients/${list.clientId}`} className="back-link">
         &larr; {list.client.name}
       </Link>
+      <span className="eyebrow">List</span>
       <h1>{list.name}</h1>
       <p className="subtitle">
-        {list.totalRows} rows &middot; source file {list.sourceFileName}
+        <span className="num">{list.totalRows}</span> rows &middot; {list.sourceFileName}
       </p>
 
-      <div className="panel">
+      <div className="card">
         <h2>Progress</h2>
         <ListProgress listId={list.id} />
       </div>

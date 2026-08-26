@@ -12,8 +12,9 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
   });
 
   const csv = buildExportCsv(
+    list.columnHeaders,
     rows.map((r) => ({
-      email: r.rawEmail,
+      rawRow: r.rawRow as Record<string, unknown>,
       finalStatus: r.finalStatus ?? "unresolved",
       finalSource: r.finalSource ?? "",
       mtnMessage: r.mtnMessage,
