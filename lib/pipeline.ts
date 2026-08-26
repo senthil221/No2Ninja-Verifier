@@ -4,6 +4,7 @@ import { config } from "./config";
 import { parseEmailCsv } from "./csv";
 import { mtnQueue, n2bPollQueue } from "./queue";
 import { n2bClient, type N2bRowResult } from "./n2b";
+import { classifyMtnMessage } from "./mtn";
 import type { FinalStatus, ResultSource } from "@prisma/client";
 
 // ---------- Ingest ----------
@@ -121,6 +122,29 @@ async function enqueuePendingRows(listId: string) {
   );
 }
 
+// Rows waiting on N2B were parked there by whatever classification rules
+// were current when they ran. Re-apply today's rules to the MTN reply we
+// already stored: if MTN had in fact answered definitively (an earlier bug
+// mis-parked "No MX" replies, for one), resolve the row for free instead of
+// paying the expensive provider to re-answer it.
+async function reclassifyParkedRows(listId: string) {
+  const parked = await prisma.listRow.findMany({
+    where: { listId, stage: "needs_n2b", mtnMessage: { not: null } },
+    select: { id: true, normalizedEmail: true, mtnMessage: true },
+  });
+
+  for (const row of parked) {
+    const outcome = classifyMtnMessage(row.mtnMessage!);
+    if (outcome !== "valid" && outcome !== "invalid") continue;
+
+    await prisma.listRow.update({
+      where: { id: row.id },
+      data: { stage: "mtn_done", finalStatus: outcome, finalSource: "mtn" },
+    });
+    await upsertEmailCache(row.normalizedEmail, { mtnResult: outcome });
+  }
+}
+
 // Resume a list that stopped partway (a provider outage, a bad key that has
 // since been fixed). Picks up from whatever stage each row actually reached,
 // so already-verified rows are never re-checked or re-paid for.
@@ -132,6 +156,8 @@ export async function retryList(listId: string) {
     await enqueuePendingRows(listId);
     return;
   }
+
+  await reclassifyParkedRows(listId);
 
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
