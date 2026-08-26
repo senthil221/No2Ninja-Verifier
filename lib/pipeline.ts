@@ -161,6 +161,24 @@ export async function recordMtnResult(params: {
   await maybeFinalizeMtnPass(params.listId);
 }
 
+// An account-level MTN failure (bad/disabled key, exhausted quota) says
+// nothing about the addresses themselves. Stop the whole list so a
+// misconfiguration can't quietly escalate every row to the paid provider.
+export async function failListFromMtn(listId: string, mtnMessage: string) {
+  await prisma.list.update({
+    where: { id: listId },
+    data: {
+      status: "failed",
+      lastError: `Mail Tester Ninja rejected the request: "${mtnMessage}". No rows were escalated to NeverBounce. Check MTN_API_KEY.`,
+    },
+  });
+}
+
+export async function isListFailed(listId: string) {
+  const list = await prisma.list.findUnique({ where: { id: listId }, select: { status: true } });
+  return list?.status === "failed";
+}
+
 // Rows that exhausted MTN retries on a transient error also fall through to N2B.
 export async function recordMtnExhausted(params: {
   listRowId: string;

@@ -3,7 +3,13 @@ import { Worker, type Job } from "bullmq";
 import { redisConnection, type MtnVerifyJobData, type N2bPollJobData } from "../lib/queue";
 import { config, assertProviderKeysConfigured } from "../lib/config";
 import { mtnClient, classifyMtnMessage } from "../lib/mtn";
-import { recordMtnResult, recordMtnExhausted, pollN2bBatchOnce } from "../lib/pipeline";
+import {
+  recordMtnResult,
+  recordMtnExhausted,
+  pollN2bBatchOnce,
+  failListFromMtn,
+  isListFailed,
+} from "../lib/pipeline";
 
 assertProviderKeysConfigured();
 
@@ -30,8 +36,19 @@ const mtnWorker = new Worker<MtnVerifyJobData>(
   "mtn-verify",
   async (job: Job<MtnVerifyJobData>) => {
     const { listRowId, listId, email } = job.data;
+
+    // A fatal failure stops the list, but jobs already queued for it keep
+    // arriving. Skip them instead of hammering a known-bad key thousands
+    // of times.
+    if (await isListFailed(listId)) return;
+
     const result = await mtnClient.verify(email);
     const outcome = classifyMtnMessage(result.message);
+
+    if (outcome === "fatal") {
+      await failListFromMtn(listId, result.message);
+      return;
+    }
 
     if (outcome === "transient") {
       throw new TransientMtnError(result.code, result.message);

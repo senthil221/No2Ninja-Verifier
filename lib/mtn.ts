@@ -14,7 +14,11 @@ export interface MtnResult {
 //   - final/invalid  -> row is done, mark invalid, no retry
 //   - transient      -> retry on MTN before giving up
 //   - ambiguous      -> catch-all; behavior controlled by CATCH_ALL_HANDLING
-export type MtnOutcome = "valid" | "invalid" | "transient" | "ambiguous";
+//   - fatal          -> our account/key is broken, not this address. Stop the
+//                       whole list. Never escalate these to N2B: a bad key
+//                       would otherwise dump every row of a 20k list into the
+//                       expensive provider and silently burn 20k credits.
+export type MtnOutcome = "valid" | "invalid" | "transient" | "ambiguous" | "fatal";
 
 const MESSAGE_OUTCOME: Record<string, MtnOutcome> = {
   Accepted: "valid",
@@ -25,10 +29,21 @@ const MESSAGE_OUTCOME: Record<string, MtnOutcome> = {
   "Mx Error": "transient",
   Timeout: "transient",
   "SPAM Block": "transient",
+  "Disabled Key": "fatal",
 };
 
 export function classifyMtnMessage(message: string): MtnOutcome {
-  return MESSAGE_OUTCOME[message] ?? "transient";
+  const known = MESSAGE_OUTCOME[message];
+  if (known) return known;
+
+  // Undocumented account-level failures ("Invalid Key", "Quota Exceeded",
+  // "Expired Subscription", ...) must be treated as fatal, not retried and
+  // escalated -- erring toward "stop and tell someone" is far cheaper than
+  // erring toward "send the whole list to the paid provider".
+  if (/\b(key|quota|subscription|credit|expired|suspend|disabled|unauthor)/i.test(message)) {
+    return "fatal";
+  }
+  return "transient";
 }
 
 export class MtnClient {
