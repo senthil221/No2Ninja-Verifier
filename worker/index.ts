@@ -1,8 +1,8 @@
 import "dotenv/config";
 import { Worker, type Job } from "bullmq";
 import { redisConnection, type MtnVerifyJobData, type N2bPollJobData } from "../lib/queue";
-import { config, assertProviderKeysConfigured } from "../lib/config";
-import { mtnClient, classifyMtnResult } from "../lib/mtn";
+import { config, assertProviderKeysConfigured, mtnRequestIntervalMs } from "../lib/config";
+import { mtnClient, classifyMtnResult, MtnRateLimitedError } from "../lib/mtn";
 import {
   recordMtnResult,
   recordMtnExhausted,
@@ -33,7 +33,7 @@ class TransientMtnError extends Error {
   }
 }
 
-const mtnWorker = new Worker<MtnVerifyJobData>(
+const mtnWorker: Worker<MtnVerifyJobData> = new Worker<MtnVerifyJobData>(
   "mtn-verify",
   async (job: Job<MtnVerifyJobData>) => {
     const { listRowId, listId, email } = job.data;
@@ -43,7 +43,22 @@ const mtnWorker = new Worker<MtnVerifyJobData>(
     // times, or writing rows back to a list that no longer exists.
     if (await isListInactive(listId)) return;
 
-    const result = await mtnClient.verify(email);
+    let result;
+    try {
+      result = await mtnClient.verify(email);
+    } catch (err) {
+      if (err instanceof MtnRateLimitedError) {
+        // Pause the whole worker, not just this job -- every other in-flight
+        // request is hitting the same limit. RateLimitError returns the job
+        // to the queue without consuming a retry, so being throttled costs
+        // time rather than costing the row (or the list).
+        console.warn(`[worker:mtn-verify] 429 received, pausing ${err.retryAfterMs}ms`);
+        await mtnWorker.rateLimit(err.retryAfterMs);
+        throw Worker.RateLimitError();
+      }
+      throw err;
+    }
+
     const outcome = classifyMtnResult(result.code, result.message);
 
     if (outcome === "fatal") {
@@ -66,17 +81,23 @@ const mtnWorker = new Worker<MtnVerifyJobData>(
   },
   {
     connection: redisConnection,
-    // The limiter is what protects the key: it caps requests per window no
-    // matter how many run at once. Concurrency only decides how much of that
-    // allowance actually gets used -- at 1, a single slow SMTP probe stalls
-    // everything behind it and the queue runs far under the plan's limit.
     concurrency: config.mtn.concurrency,
-    limiter: { max: config.mtn.rateLimitMax, duration: config.mtn.rateLimitWindowMs },
+    // One start per interval rather than a window's worth at once. Expressed
+    // as max:1 because a window-based limit lets the entire allowance fire
+    // simultaneously -- legal by the per-window total, but a burst as far as
+    // the provider is concerned, which is what earned a 429. Concurrency
+    // still lets slow probes overlap, so paced starts do not mean idle time.
+    limiter: { max: 1, duration: mtnRequestIntervalMs() },
   }
 );
 
 mtnWorker.on("failed", async (job, err) => {
   if (!job) return;
+
+  // A throttled job is being retried, not abandoned -- it must never be
+  // read as the provider being unreachable, which would stop the list.
+  if (err?.name === "RateLimitError" || err instanceof MtnRateLimitedError) return;
+
   const isLastAttempt = job.attemptsMade >= (job.opts.attempts ?? 1);
   if (!isLastAttempt) return;
 

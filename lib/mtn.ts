@@ -88,6 +88,16 @@ export function classifyMtnMessage(message: string): MtnOutcome {
   return "transient";
 }
 
+// Being told to slow down is not a failure of the address, the key, or the
+// network -- it is a scheduling problem, and must be handled by backing off
+// rather than by giving up on the row (or worse, the list).
+export class MtnRateLimitedError extends Error {
+  constructor(public retryAfterMs: number) {
+    super(`MTN rate limited (429), backing off ${retryAfterMs}ms`);
+    this.name = "MtnRateLimitedError";
+  }
+}
+
 export class MtnClient {
   async verify(email: string): Promise<MtnResult> {
     const url = new URL(config.mtn.baseUrl);
@@ -95,6 +105,18 @@ export class MtnClient {
     url.searchParams.set("key", config.mtn.apiKey);
 
     const res = await fetch(url.toString(), { method: "GET" });
+
+    if (res.status === 429) {
+      // Honour Retry-After when offered; otherwise wait out a full window,
+      // which is long enough for any burst allowance to refill.
+      const header = res.headers.get("retry-after");
+      const fromHeader = header ? Number(header) * 1000 : NaN;
+      const waitMs = Number.isFinite(fromHeader)
+        ? Math.max(fromHeader, 1000)
+        : config.mtn.rateLimitWindowMs;
+      throw new MtnRateLimitedError(waitMs);
+    }
+
     if (!res.ok) {
       throw new Error(`MTN request failed: ${res.status} ${res.statusText}`);
     }

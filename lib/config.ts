@@ -47,13 +47,15 @@ export const config = {
     rateLimitMax: int("MTN_RATE_LIMIT_MAX", 57),
     rateLimitWindowMs: int("MTN_RATE_LIMIT_WINDOW_MS", 10_000),
     maxRetries: int("MTN_MAX_RETRIES", 3),
-    // How many checks are in flight at once. This does not raise the request
-    // rate -- the limiter above is the ceiling and still applies -- it only
-    // stops a slow SMTP probe from stalling the queue behind it. Calls are
-    // latency-bound (often ~1s, occasionally 7s), so at concurrency 1 the
-    // pipeline ran at roughly a tenth of the plan's allowance.
-    // Needs to be at least ceiling x mean-latency to keep the limit saturated.
-    concurrency: int("MTN_CONCURRENCY", 12),
+    // How many checks may be in flight at once. Starts are paced (see
+    // requestIntervalMs), so this only decides how much latency can be
+    // absorbed -- it does not create bursts.
+    concurrency: int("MTN_CONCURRENCY", 8),
+    // Multiplier on the plan's own interval. A window-based limit permits
+    // the whole allowance to fire at once, which reads as a burst and earns
+    // a 429 even while the per-window total is legal; pacing every request
+    // evenly, slightly slower than the stated rate, does not.
+    rateSafetyFactor: Number(process.env.MTN_RATE_SAFETY ?? "1.15"),
   },
 
   n2b: {
@@ -98,6 +100,14 @@ export const config = {
   // Used to build clickable links in alerts.
   publicUrl: (process.env.PUBLIC_URL ?? "").trim(),
 };
+
+// Minimum gap between request starts, derived from the plan limit rather
+// than hardcoded, so changing the plan changes the pacing.
+// 57 per 10s -> 175ms apart -> x1.15 safety -> ~202ms, about 4.9/sec.
+export function mtnRequestIntervalMs(): number {
+  const base = config.mtn.rateLimitWindowMs / Math.max(1, config.mtn.rateLimitMax);
+  return Math.ceil(base * config.mtn.rateSafetyFactor);
+}
 
 export function assertProviderKeysConfigured() {
   required("MTN_API_KEY");
