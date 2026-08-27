@@ -5,8 +5,15 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
   const list = await prisma.list.findUnique({ where: { id: params.listId } });
   if (!list) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  const [stageGroups, statusGroups, sourceGroups, n2bBatches, creditSpend, parkedReasons] =
-    await Promise.all([
+  const [
+    stageGroups,
+    statusGroups,
+    sourceGroups,
+    n2bBatches,
+    creditSpend,
+    parkedReasons,
+    fullBreakdown,
+  ] = await Promise.all([
     prisma.listRow.groupBy({ by: ["stage"], where: { listId: list.id }, _count: true }),
     prisma.listRow.groupBy({
       by: ["finalStatus"],
@@ -29,6 +36,13 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
       prisma.listRow.groupBy({
         by: ["mtnMessage"],
         where: { listId: list.id, stage: "needs_n2b" },
+        _count: true,
+      }),
+      // Every row accounted for: what the cheap pass said, and where that
+      // leaves it. This is the full picture, not just the escalations.
+      prisma.listRow.groupBy({
+        by: ["mtnMessage", "stage", "finalStatus"],
+        where: { listId: list.id },
         _count: true,
       }),
     ]);
@@ -58,6 +72,17 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
     pendingN2bReasons: parkedReasons
       .map((g) => ({ reason: g.mtnMessage ?? "No response", count: g._count }))
       .sort((a, b) => b.count - a.count),
+    // Full accounting: one line per distinct MTN reply, what it means, and
+    // whether it is settled or headed for the paid pass.
+    breakdown: fullBreakdown
+      .map((g) => ({
+        mtnMessage: g.mtnMessage ?? (g.stage === "cache_hit" ? "Known from cache" : "Not checked"),
+        stage: g.stage,
+        finalStatus: g.finalStatus,
+        count: g._count,
+        escalates: g.stage === "needs_n2b",
+      }))
+      .sort((a, b) => Number(a.escalates) - Number(b.escalates) || b.count - a.count),
     n2bBatches: n2bBatches.map((b) => ({
       id: b.id,
       status: b.status,

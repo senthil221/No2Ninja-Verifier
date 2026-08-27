@@ -64,6 +64,18 @@ export const config = {
     | "accept"
     | "n2b",
 
+  // What the cheap pass hands on to the paid pass.
+  //   all_except_valid - anything MTN did not confirm deliverable gets a
+  //                      second opinion. Costs more, but MTN's "Rejected"
+  //                      can be a false negative (servers that refuse
+  //                      verification probes), and a wrongly discarded
+  //                      prospect costs more than a credit.
+  //   unresolved       - only rows MTN could not answer (catch-all, blocked)
+  //                      escalate; its invalid verdicts are trusted as final.
+  mtnEscalationPolicy: (process.env.MTN_ESCALATION_POLICY === "unresolved"
+    ? "unresolved"
+    : "all_except_valid") as "all_except_valid" | "unresolved",
+
   emailCacheTtlDays: int("EMAIL_CACHE_TTL_DAYS", 90),
 };
 

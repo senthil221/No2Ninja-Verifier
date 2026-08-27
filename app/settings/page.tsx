@@ -58,6 +58,14 @@ export default function SettingsPage() {
       <div className="card">
         <h2>Pipeline behavior</h2>
         <div className="kv-row">
+          <span className="k">Sent on to NeverBounce</span>
+          <code>
+            {config.mtnEscalationPolicy === "all_except_valid"
+              ? "everything except confirmed valid"
+              : "only rows MTN couldn't answer"}
+          </code>
+        </div>
+        <div className="kv-row">
           <span className="k">Catch-all handling</span>
           <code>{config.catchAllHandling}</code>
         </div>

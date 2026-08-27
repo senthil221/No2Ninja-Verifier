@@ -72,25 +72,43 @@ async function runCachePass(listId: string) {
     const entry = cacheByEmail.get(row.normalizedEmail);
     if (!entry) continue;
 
-    // Prefer the N2B result (more authoritative) if fresh, else a fresh MTN result.
-    let finalStatus: FinalStatus | undefined;
-    if (entry.lastN2bResult && entry.lastN2bCheckedAt && entry.lastN2bCheckedAt >= cutoff) {
-      finalStatus = CACHE_HIT_MAP[entry.lastN2bResult];
-    } else if (
-      entry.lastMtnResult &&
-      entry.lastMtnCheckedAt &&
-      entry.lastMtnCheckedAt >= cutoff &&
-      CACHE_HIT_MAP[entry.lastMtnResult]
-    ) {
-      finalStatus = CACHE_HIT_MAP[entry.lastMtnResult];
+    const n2bFresh =
+      entry.lastN2bResult && entry.lastN2bCheckedAt && entry.lastN2bCheckedAt >= cutoff;
+    const mtnFresh =
+      entry.lastMtnResult && entry.lastMtnCheckedAt && entry.lastMtnCheckedAt >= cutoff;
+
+    // A previous N2B verdict is authoritative -- it is the answer the paid
+    // pass would give, so reuse it and charge nothing.
+    if (n2bFresh) {
+      const finalStatus = CACHE_HIT_MAP[entry.lastN2bResult!];
+      if (finalStatus) {
+        await prisma.listRow.update({
+          where: { id: row.id },
+          data: { stage: "cache_hit", finalStatus, finalSource: "cache" },
+        });
+      }
+      continue;
     }
 
-    if (finalStatus) {
-      await prisma.listRow.update({
-        where: { id: row.id },
-        data: { stage: "cache_hit", finalStatus, finalSource: "cache" },
-      });
-    }
+    if (!mtnFresh) continue;
+    const cachedMtn = CACHE_HIT_MAP[entry.lastMtnResult!];
+    if (!cachedMtn) continue;
+
+    // Only settle from a cached MTN verdict where a live MTN call would also
+    // have settled it. Otherwise skip the redundant MTN call but still send
+    // the row to the paid pass -- the cache must not quietly bypass the
+    // escalation policy.
+    const settled = settleMtnOutcome(cachedMtn === "valid" ? "valid" : "invalid");
+    await prisma.listRow.update({
+      where: { id: row.id },
+      data: settled
+        ? { stage: "cache_hit", finalStatus: settled, finalSource: "cache" }
+        : {
+            stage: "needs_n2b",
+            mtnStatus: "cache",
+            mtnMessage: `Cached MTN result: ${cachedMtn}`,
+          },
+    });
   }
 }
 
@@ -101,8 +119,11 @@ async function enqueuePendingRows(listId: string) {
   });
 
   if (pending.length === 0) {
-    // Whole list resolved from cache.
-    await prisma.list.update({ where: { id: listId }, data: { status: "completed", completedAt: new Date() } });
+    // Nothing left for the cheap pass. Rows the cache sent straight to the
+    // paid pass still have to reach the review gate, so settle the list
+    // through the normal finalize path rather than calling it done.
+    await prisma.list.update({ where: { id: listId }, data: { status: "running_mtn" } });
+    await maybeFinalizeMtnPass(listId);
     return;
   }
 
@@ -146,9 +167,14 @@ async function reclassifyParkedRows(listId: string) {
     const outcome = classifyMtnMessage(row.mtnMessage!);
     if (outcome !== "valid" && outcome !== "invalid") continue;
 
+    // Respect the current escalation policy: under all_except_valid an
+    // "invalid" row stays parked for its second opinion.
+    const settled = settleMtnOutcome(outcome);
+    if (!settled) continue;
+
     await prisma.listRow.update({
       where: { id: row.id },
-      data: { stage: "mtn_done", finalStatus: outcome, finalSource: "mtn" },
+      data: { stage: "mtn_done", finalStatus: settled, finalSource: "mtn" },
     });
     await upsertEmailCache(row.normalizedEmail, { mtnResult: outcome });
   }
@@ -198,15 +224,7 @@ export async function recordMtnResult(params: {
   mtnMessage: string;
   outcome: "valid" | "invalid" | "ambiguous";
 }) {
-  const finalStatus: FinalStatus | null =
-    params.outcome === "valid"
-      ? "valid"
-      : params.outcome === "invalid"
-        ? "invalid"
-        : config.catchAllHandling === "accept"
-          ? "risky"
-          : null;
-
+  const finalStatus = settleMtnOutcome(params.outcome);
   const stage = finalStatus ? "mtn_done" : "needs_n2b";
 
   await prisma.listRow.update({
@@ -221,11 +239,38 @@ export async function recordMtnResult(params: {
     },
   });
 
-  if (finalStatus) {
-    await upsertEmailCache(params.normalizedEmail, { mtnResult: finalStatus });
+  // Cache what MTN concluded even when the row escalates -- it is still a
+  // real observation about the address, and it lets a later list skip the
+  // MTN call and go straight to the paid pass.
+  const mtnVerdict = mtnVerdictFor(params.outcome);
+  if (mtnVerdict) {
+    await upsertEmailCache(params.normalizedEmail, { mtnResult: mtnVerdict });
   }
 
   await maybeFinalizeMtnPass(params.listId);
+}
+
+// What MTN itself concluded about the address, independent of whether the
+// row goes on to the paid pass.
+function mtnVerdictFor(outcome: "valid" | "invalid" | "ambiguous"): FinalStatus | null {
+  if (outcome === "valid") return "valid";
+  if (outcome === "invalid") return "invalid";
+  return null;
+}
+
+// Whether MTN's verdict is the final word for this row, or whether it hands
+// on to the paid pass. Returns null to escalate.
+function settleMtnOutcome(outcome: "valid" | "invalid" | "ambiguous"): FinalStatus | null {
+  if (outcome === "valid") return "valid";
+
+  if (outcome === "invalid") {
+    // Under all_except_valid, MTN's "invalid" is treated as an opinion to be
+    // confirmed rather than a conclusion, so the row escalates.
+    return config.mtnEscalationPolicy === "all_except_valid" ? null : "invalid";
+  }
+
+  // Catch-all.
+  return config.catchAllHandling === "accept" ? "risky" : null;
 }
 
 // An account-level MTN failure (bad/disabled key, exhausted quota) says
@@ -386,17 +431,23 @@ export async function finishWithoutN2b(listId: string) {
   });
 
   for (const row of parked) {
-    // A catch-all domain accepted the address but guarantees nothing --
-    // that is genuinely "risky", not merely unknown. Anything else went
-    // unanswered, so say so rather than implying a verdict.
-    const isCatchAll = (row.mtnMessage ?? "").trim().toLowerCase() === "catch-all";
+    // Fall back to whatever MTN actually said rather than blanket "unknown":
+    // a row it called Rejected really is invalid on the evidence we have, a
+    // catch-all domain is genuinely risky, and only rows it never answered
+    // are truly unknown.
+    const outcome = row.mtnMessage ? classifyMtnMessage(row.mtnMessage) : "transient";
+    const finalStatus: FinalStatus =
+      outcome === "valid"
+        ? "valid"
+        : outcome === "invalid"
+          ? "invalid"
+          : outcome === "ambiguous"
+            ? "risky"
+            : "unknown";
+
     await prisma.listRow.update({
       where: { id: row.id },
-      data: {
-        stage: "mtn_done",
-        finalStatus: isCatchAll ? "risky" : "unknown",
-        finalSource: "mtn",
-      },
+      data: { stage: "mtn_done", finalStatus, finalSource: "mtn" },
     });
   }
 

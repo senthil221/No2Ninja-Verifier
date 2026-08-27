@@ -599,6 +599,34 @@ a > button {
   border-bottom: none;
 }
 
+.dest-n2b {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-strong);
+  white-space: nowrap;
+}
+
+.pill-res-valid {
+  background: var(--valid-soft);
+  color: var(--valid);
+}
+
+.pill-res-invalid {
+  background: var(--invalid-soft);
+  color: var(--invalid);
+}
+
+.pill-res-risky {
+  background: var(--risky-soft);
+  color: var(--accent-strong);
+}
+
+.pill-res-unknown,
+.pill-res-pending {
+  background: var(--unknown-soft);
+  color: var(--unknown);
+}
+
 .review-actions {
   display: flex;
   gap: 8px;

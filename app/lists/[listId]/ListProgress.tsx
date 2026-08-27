@@ -15,6 +15,13 @@ interface StatusPayload {
   n2bBatches: { id: string; status: string; emailCount: number }[];
   pendingN2b: number;
   pendingN2bReasons: { reason: string; count: number }[];
+  breakdown: {
+    mtnMessage: string;
+    stage: string;
+    finalStatus: string | null;
+    count: number;
+    escalates: boolean;
+  }[];
 }
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "needs_approval"]);
@@ -107,6 +114,42 @@ export default function ListProgress({ listId }: { listId: string }) {
           <span className="label">N2B credits</span>
         </div>
       </div>
+
+      {data.breakdown.length > 0 && (
+        <div style={{ marginTop: 22 }}>
+          <div className="review-label" style={{ marginBottom: 8 }}>
+            Every row accounted for
+          </div>
+          <table className="reason-table">
+            <thead>
+              <tr>
+                <th>Mail Tester Ninja said</th>
+                <th>Result</th>
+                <th style={{ textAlign: "right" }}>Rows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.breakdown.map((b, i) => (
+                <tr key={`${b.mtnMessage}-${b.stage}-${i}`}>
+                  <td>{b.mtnMessage}</td>
+                  <td>
+                    {b.escalates ? (
+                      <span className="dest-n2b">&rarr; NeverBounce</span>
+                    ) : (
+                      <span className={`pill pill-res-${b.finalStatus ?? "unknown"}`}>
+                        {b.finalStatus ?? "pending"}
+                      </span>
+                    )}
+                  </td>
+                  <td className="num" style={{ textAlign: "right" }}>
+                    {b.count}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {data.status === "needs_approval" && (
         <div className="review-panel">
