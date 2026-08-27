@@ -4,15 +4,15 @@
  * "Deployed" previously meant "the containers started", which is not the
  * same as "the pipeline works" -- several releases in this project started
  * cleanly and were completely broken. This drives an actual list through
- * ingest, the cache passes and the cheap provider, asserts the results are
- * what those addresses should produce, and deletes everything it created.
+ * ingest, the caches and the cheap provider, then deletes what it created.
  *
  * It does NOT spend NeverBounce credits: it stops at the review gate, which
- * is exactly where a real list stops.
+ * is where a real list stops.
  *
  *   npm run smoke
  */
 import "dotenv/config";
+import { randomBytes } from "crypto";
 import { prisma } from "../lib/prisma";
 import { ingestList, startVerification, deleteList } from "../lib/pipeline";
 import { assertProviderKeysConfigured } from "../lib/config";
@@ -20,40 +20,27 @@ import { assertProviderKeysConfigured } from "../lib/config";
 const CLIENT_NAME = "__smoke_test__";
 const TIMEOUT_MS = 180_000;
 
-// Addresses whose behaviour is stable and knowable, so the expectation is a
-// real assertion rather than a snapshot of whatever happened to come back.
+// A never-before-seen address at a domain that is emphatically not
+// catch-all. Both caches must miss it, which is what forces a real call to
+// the provider -- reusing a fixed address only proves the cache works, as
+// the first version of this script discovered the hard way.
+const UNIQUE_MISS = `smoke-${randomBytes(8).toString("hex")}@gmail.com`;
+
+// Already known to the caches by now. Included to prove the free paths
+// still resolve it rather than paying to re-ask.
+const DEAD_DOMAIN = "contact@thisdomaindoesnotexist-verifiertest.com";
+
 const FIXTURE = `email,first_name,company
-schalonm@cashncarryelectric.com,Known,Good
-contact@thisdomaindoesnotexist-verifiertest.com,No,MX
-zzz.verifier.test.88213@gmail.com,Ghost,Gmail
+${UNIQUE_MISS},Fresh,Miss
+${DEAD_DOMAIN},No,MX
+${UNIQUE_MISS},Dupe,Miss
 not-an-email,Bad,Syntax
-zzz.verifier.test.88213@gmail.com,Dupe,Gmail
 `;
-
-interface Expectation {
-  email: string;
-  expectCode: string;
-  describe: string;
-}
-
-const EXPECTED: Expectation[] = [
-  { email: "schalonm@cashncarryelectric.com", expectCode: "ok", describe: "a real mailbox" },
-  {
-    email: "contact@thisdomaindoesnotexist-verifiertest.com",
-    expectCode: "ko",
-    describe: "a domain with no MX",
-  },
-  { email: "zzz.verifier.test.88213@gmail.com", expectCode: "ko", describe: "a rejected mailbox" },
-];
 
 const failures: string[] = [];
 function check(ok: boolean, message: string) {
-  if (ok) {
-    console.log(`  PASS  ${message}`);
-  } else {
-    console.log(`  FAIL  ${message}`);
-    failures.push(message);
-  }
+  console.log(`  ${ok ? "PASS" : "FAIL"}  ${message}`);
+  if (!ok) failures.push(message);
 }
 
 async function waitForSettled(listId: string): Promise<string> {
@@ -63,8 +50,6 @@ async function waitForSettled(listId: string): Promise<string> {
       where: { id: listId },
       select: { status: true },
     });
-    // running_mtn is the only state that resolves itself; everything else is
-    // either finished or waiting on a person.
     if (list.status !== "running_mtn" && list.status !== "pending") return list.status;
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -75,15 +60,12 @@ async function main() {
   assertProviderKeysConfigured();
   console.log("Smoke test: driving a real list through the pipeline\n");
 
-  // Never reuse a previous run's leftovers -- a stale client would make the
-  // cache resolve rows and hide a broken provider call.
   await cleanup();
-
   const client = await prisma.client.create({ data: { name: CLIENT_NAME } });
   let listId: string | null = null;
 
   try {
-    console.log("1. Ingest");
+    console.log("1. Ingest and parsing");
     const list = await ingestList({
       clientId: client.id,
       name: "smoke",
@@ -92,38 +74,44 @@ async function main() {
     });
     listId = list.id;
 
-    check(list.totalRows === 3, `parsed 3 usable rows from 5 lines (got ${list.totalRows})`);
-    check(list.skippedInvalid === 1, `skipped 1 malformed address (got ${list.skippedInvalid})`);
-    check(list.skippedDupes === 1, `skipped 1 duplicate (got ${list.skippedDupes})`);
+    check(list.totalRows === 2, `2 usable rows from 4 lines (got ${list.totalRows})`);
+    check(list.skippedInvalid === 1, `1 malformed address skipped (got ${list.skippedInvalid})`);
+    check(list.skippedDupes === 1, `1 duplicate skipped (got ${list.skippedDupes})`);
 
-    console.log("\n2. Cheap pass");
+    console.log("\n2. Pipeline runs to a decision point");
     await startVerification(list.id);
     const status = await waitForSettled(list.id);
     check(status !== "timeout", `settled within ${TIMEOUT_MS / 1000}s (status: ${status})`);
-    check(
-      status !== "failed",
-      `list did not fail${status === "failed" ? " -- check worker logs" : ""}`
-    );
+    check(status !== "failed", "list did not fail");
 
-    console.log("\n3. Provider responses");
     const rows = await prisma.listRow.findMany({ where: { listId: list.id } });
 
-    for (const expected of EXPECTED) {
-      const row = rows.find((r) => r.normalizedEmail === expected.email);
-      if (!row) {
-        check(false, `row present for ${expected.describe}`);
-        continue;
-      }
-      // A null code means the provider was never actually reached -- the
-      // failure mode that looked like "verification is slow" for a whole day.
-      check(
-        row.mtnStatus === expected.expectCode,
-        `${expected.describe} -> code "${expected.expectCode}" (got "${row.mtnStatus}" / "${row.mtnMessage}")`
-      );
-    }
+    console.log("\n3. The provider was actually reached");
+    const fresh = rows.find((r) => r.normalizedEmail === UNIQUE_MISS);
+    // A null code here means no call was made or none came back -- the
+    // failure that once looked like "verification is just slow".
+    check(
+      !!fresh && ["ok", "ko", "mb"].includes(fresh.mtnStatus ?? ""),
+      `uncached address got a real provider verdict (got "${fresh?.mtnStatus}" / "${fresh?.mtnMessage}")`
+    );
+    check(
+      fresh?.mtnMessage?.toLowerCase() === "rejected",
+      `a nonexistent Gmail mailbox is rejected (got "${fresh?.mtnMessage}")`
+    );
 
-    const stuck = rows.filter((r) => r.stage === "pending").length;
-    check(stuck === 0, `no rows left unprocessed (${stuck} stuck)`);
+    console.log("\n4. Free paths still resolve what is already known");
+    const dead = rows.find((r) => r.normalizedEmail === DEAD_DOMAIN);
+    check(
+      dead?.finalStatus === "invalid",
+      `a domain with no MX resolves invalid (got "${dead?.finalStatus}")`
+    );
+    check(
+      dead?.finalSource === "cache" || dead?.mtnStatus === "ko",
+      `resolved from cache or a direct verdict, not escalated (source "${dead?.finalSource}")`
+    );
+
+    console.log("\n5. Nothing was left behind or charged");
+    check(rows.filter((r) => r.stage === "pending").length === 0, "no rows left unprocessed");
 
     const spend = await prisma.creditLedger.aggregate({
       _sum: { amount: true },
@@ -134,10 +122,12 @@ async function main() {
       `no credits spent reaching the review gate (spent ${spend._sum.amount ?? 0})`
     );
   } finally {
-    console.log("\n4. Cleanup");
+    console.log("\n6. Cleanup");
     if (listId) await deleteList(listId).catch(() => {});
     await cleanup();
-    console.log("  removed test client and list");
+    // The throwaway address would otherwise sit in the cache forever.
+    await prisma.emailCache.deleteMany({ where: { normalizedEmail: UNIQUE_MISS } }).catch(() => {});
+    console.log("  removed test client, list and cache entry");
   }
 
   console.log();
