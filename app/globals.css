@@ -517,6 +517,110 @@ a > button {
   font-size: 13.5px;
 }
 
+/* ---------- Auth ---------- */
+
+.auth-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--paper);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 32px 30px;
+  animation: rise 0.35s ease both;
+}
+
+.auth-mark {
+  margin-bottom: 16px;
+}
+
+.auth-title {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+.auth-sub {
+  color: var(--ink-muted);
+  font-size: 13px;
+  margin: 0 0 22px;
+  line-height: 1.5;
+}
+
+.auth-card .field input[type="email"],
+.auth-card .field input[type="password"] {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: var(--font-ui);
+  color: var(--ink);
+}
+
+.auth-card .field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.auth-submit {
+  width: 100%;
+  margin-top: 8px;
+  padding: 11px 16px;
+}
+
+.auth-error {
+  background: var(--invalid-soft);
+  border: 1px solid #eab3ac;
+  color: var(--invalid);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.signout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.signout-email {
+  font-size: 11px;
+  color: var(--ink-faint);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-num);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.signout-btn {
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--border-strong);
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.signout-btn:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+
 /* ---------- Pipeline stepper ---------- */
 
 .stepper {

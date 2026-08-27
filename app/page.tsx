@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { createClient } from "./actions";
 import Link from "next/link";
+import { requireUser } from "@/lib/require-user";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,7 @@ const ACTIVE_LABEL: Record<string, string> = {
 };
 
 export default async function HomePage() {
+  await requireUser();
   const [clients, n2bSpend, cacheHits, totalRows, needsAttention] = await Promise.all([
     prisma.client.findMany({
       orderBy: { createdAt: "desc" },

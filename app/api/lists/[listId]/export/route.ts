@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { FinalStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { buildExportCsv } from "@/lib/csv";
+import { requireUserForApi } from "@/lib/require-user";
 
 // Named export sets, so a send list can be pulled without hand-filtering a
 // spreadsheet. Results from both providers are merged into one file --
@@ -17,6 +18,11 @@ const PRESETS: Record<string, { statuses: FinalStatus[]; suffix: string }> = {
 };
 
 export async function GET(req: Request, { params }: { params: { listId: string } }) {
+  // Guarded like every other route: this one streams the actual prospect
+  // data, so an unauthenticated hit here would hand over the whole list.
+  const { response } = await requireUserForApi();
+  if (response) return response;
+
   const list = await prisma.list.findUnique({ where: { id: params.listId } });
   if (!list) return NextResponse.json({ error: "not found" }, { status: 404 });
 

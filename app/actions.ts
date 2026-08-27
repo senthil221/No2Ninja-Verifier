@@ -11,8 +11,16 @@ import {
   finishWithoutN2b,
   startVerification,
 } from "@/lib/pipeline";
+import { getSessionUser } from "@/lib/auth";
+
+// Server actions are POST endpoints in their own right -- a page guard does
+// not cover them, so each one asserts the session itself.
+async function assertSignedIn() {
+  if (!(await getSessionUser())) throw new Error("Not signed in");
+}
 
 export async function createClient(formData: FormData) {
+  await assertSignedIn();
   const name = String(formData.get("name") ?? "").trim();
   if (!name) throw new Error("Client name is required");
 
@@ -21,6 +29,7 @@ export async function createClient(formData: FormData) {
 }
 
 export async function uploadList(clientId: string, formData: FormData) {
+  await assertSignedIn();
   const files = formData.getAll("file").filter((f): f is File => f instanceof File && f.size > 0);
   const name = String(formData.get("name") ?? "").trim();
   if (files.length === 0) throw new Error("At least one CSV file is required");
@@ -49,26 +58,31 @@ export async function uploadList(clientId: string, formData: FormData) {
 }
 
 export async function approveList(listId: string) {
+  await assertSignedIn();
   await approveN2bSubmission(listId);
   revalidatePath(`/lists/${listId}`);
 }
 
 export async function beginVerification(listId: string) {
+  await assertSignedIn();
   await startVerification(listId);
   revalidatePath(`/lists/${listId}`);
 }
 
 export async function finishListWithoutN2b(listId: string) {
+  await assertSignedIn();
   await finishWithoutN2b(listId);
   revalidatePath(`/lists/${listId}`);
 }
 
 export async function retryFailedList(listId: string) {
+  await assertSignedIn();
   await retryList(listId);
   revalidatePath(`/lists/${listId}`);
 }
 
 export async function removeList(listId: string) {
+  await assertSignedIn();
   const list = await prisma.list.findUnique({
     where: { id: listId },
     select: { clientId: true },

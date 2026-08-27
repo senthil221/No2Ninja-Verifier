@@ -1,4 +1,5 @@
 import { config } from "@/lib/config";
+import { requireUser } from "@/lib/require-user";
 
 export const dynamic = "force-dynamic";
 

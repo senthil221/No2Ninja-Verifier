@@ -3,10 +3,12 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import ListProgress from "./ListProgress";
 import DeleteListButton from "./DeleteListButton";
+import { requireUser } from "@/lib/require-user";
 
 export const dynamic = "force-dynamic";
 
 export default async function ListPage({ params }: { params: { listId: string } }) {
+  await requireUser();
   const list = await prisma.list.findUnique({
     where: { id: params.listId },
     include: { client: true },

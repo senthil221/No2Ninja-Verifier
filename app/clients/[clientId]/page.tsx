@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { uploadList } from "@/app/actions";
+import { requireUser } from "@/lib/require-user";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export default async function ClientPage({ params }: { params: { clientId: string } }) {
+  await requireUser();
   const client = await prisma.client.findUnique({
     where: { id: params.clientId },
     include: { lists: { orderBy: { createdAt: "desc" } } },

@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireUserForApi } from "@/lib/require-user";
 
 export async function GET(_req: Request, { params }: { params: { listId: string } }) {
+  const { response } = await requireUserForApi();
+  if (response) return response;
+
   const list = await prisma.list.findUnique({ where: { id: params.listId } });
   if (!list) return NextResponse.json({ error: "not found" }, { status: 404 });
 

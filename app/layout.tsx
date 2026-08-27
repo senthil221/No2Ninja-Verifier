@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { Hanken_Grotesk, IBM_Plex_Mono } from "next/font/google";
+import { getSessionUser } from "@/lib/auth";
+import SignOut from "./SignOut";
 import "./globals.css";
 
 const sans = Hanken_Grotesk({
@@ -21,7 +23,19 @@ export const metadata = {
   description: "Prospect list email verification orchestration",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const user = await getSessionUser();
+
+  // Sign-in and first-run setup render on their own, without the app shell:
+  // a sidebar full of navigation is noise on a page you cannot yet use.
+  if (!user) {
+    return (
+      <html lang="en" className={`${sans.variable} ${mono.variable}`}>
+        <body>{children}</body>
+      </html>
+    );
+  }
+
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable}`}>
       <body>
@@ -42,7 +56,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             </nav>
 
             <div className="sidebar-foot">
-              <span>MTN &rarr; NeverBounce</span>
+              <SignOut email={user.email} />
             </div>
           </aside>
           <main className="main">

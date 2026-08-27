@@ -49,6 +49,30 @@ enum N2bBatchStatus {
   failed
 }
 
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  // scrypt, stored as salt:hash. Never the password itself.
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+  sessions     Session[]
+}
+
+// Sessions live in the database rather than in a signed cookie so they can
+// actually be revoked -- logging out, or removing a user, ends access
+// immediately instead of waiting for a token to expire.
+model Session {
+  token     String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
 model Client {
   id        String   @id @default(cuid())
   name      String
