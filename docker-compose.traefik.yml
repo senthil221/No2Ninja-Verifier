@@ -6,10 +6,16 @@
 #   docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
 #
 # Requires these set in .env:
-#   DOMAIN_NAME        - base domain Traefik already has certs for (e.g. srv12345.hstgr.cloud)
-#   VERIFIER_SUBDOMAIN - subdomain for this app (default: verifier)
+#   VERIFIER_HOST      - the full hostname to serve, e.g. verify.example.com.
+#                        Set this and it is used verbatim, which is also how
+#                        you serve an apex domain (example.com) -- the
+#                        subdomain + domain pair below cannot express that.
 #   TRAEFIK_NETWORK    - the external Docker network Traefik's containers are on
 #   TLS_CERTRESOLVER   - Traefik certresolver name configured on that Traefik instance
+#
+# Legacy fallback, used only when VERIFIER_HOST is unset:
+#   DOMAIN_NAME        - base domain (e.g. srv12345.hstgr.cloud)
+#   VERIFIER_SUBDOMAIN - subdomain for this app (default: verifier)
 
 services:
   app:
@@ -19,7 +25,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=${TRAEFIK_NETWORK:-root_default}
-      - traefik.http.routers.verifier.rule=Host(`${VERIFIER_SUBDOMAIN:-verifier}.${DOMAIN_NAME}`)
+      - traefik.http.routers.verifier.rule=Host(`${VERIFIER_HOST:-${VERIFIER_SUBDOMAIN:-verifier}.${DOMAIN_NAME}}`)
       - traefik.http.routers.verifier.tls=true
       - traefik.http.routers.verifier.entrypoints=web,websecure
       - traefik.http.routers.verifier.tls.certresolver=${TLS_CERTRESOLVER:-mytlschallenge}
