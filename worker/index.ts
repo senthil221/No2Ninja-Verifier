@@ -6,6 +6,7 @@ import { mtnClient, classifyMtnMessage } from "../lib/mtn";
 import {
   recordMtnResult,
   recordMtnExhausted,
+  recordMtnUnreachable,
   pollN2bBatchOnce,
   failListFromMtn,
   isListInactive,
@@ -87,13 +88,18 @@ mtnWorker.on("failed", async (job, err) => {
         mtnMessage: err.mtnMessage,
       });
     } else {
-      // Unexpected failure (network blip, etc.) after exhausting retries —
-      // still needs to fall through to N2B rather than leaving the row stuck.
-      await recordMtnExhausted({
+      // We never got an answer from MTN at all (DNS, TLS, socket, timeout).
+      // That says nothing about the address, so escalating it to the paid
+      // provider would charge for a row the cheap pass never actually
+      // checked. Park it back as pending and stop the list instead -- a
+      // network blip must not turn into a bill.
+      console.error(
+        `[worker:mtn-verify] unreachable for ${job.data.email}: ${err.message}`
+      );
+      await recordMtnUnreachable({
         listRowId: job.data.listRowId,
         listId: job.data.listId,
-        mtnStatus: "error",
-        mtnMessage: err.message,
+        message: err.message,
       });
     }
   } catch (handlerErr) {

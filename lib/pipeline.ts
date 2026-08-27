@@ -128,6 +128,15 @@ async function enqueuePendingRows(listId: string) {
 // mis-parked "No MX" replies, for one), resolve the row for free instead of
 // paying the expensive provider to re-answer it.
 async function reclassifyParkedRows(listId: string) {
+  // Rows parked with a transport error were never actually checked by MTN --
+  // an earlier bug escalated those instead of retrying them. Send them back
+  // to the cheap pass rather than billing the paid provider for an answer
+  // nobody ever asked for.
+  await prisma.listRow.updateMany({
+    where: { listId, stage: "needs_n2b", mtnStatus: "error" },
+    data: { stage: "pending" },
+  });
+
   const parked = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b", mtnMessage: { not: null } },
     select: { id: true, normalizedEmail: true, mtnMessage: true },
@@ -151,13 +160,16 @@ async function reclassifyParkedRows(listId: string) {
 export async function retryList(listId: string) {
   await prisma.list.update({ where: { id: listId }, data: { lastError: null } });
 
+  // Re-apply current rules first: this can hand rows back to the cheap pass
+  // (never-reached rows) or resolve them outright, so it has to run before
+  // deciding what still needs doing.
+  await reclassifyParkedRows(listId);
+
   const stillPending = await prisma.listRow.count({ where: { listId, stage: "pending" } });
   if (stillPending > 0) {
     await enqueuePendingRows(listId);
     return;
   }
-
-  await reclassifyParkedRows(listId);
 
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
@@ -244,6 +256,34 @@ export async function deleteList(listId: string) {
   await prisma.list.delete({ where: { id: listId } });
 }
 
+// MTN was never reached for this row (DNS, TLS, socket, timeout). Leave it
+// pending so a retry re-runs the cheap pass on it, and stop the list so the
+// cause gets fixed -- never escalate it, because charging the paid provider
+// for a row the cheap pass never actually checked is money spent on nothing.
+export async function recordMtnUnreachable(params: {
+  listRowId: string;
+  listId: string;
+  message: string;
+}) {
+  await prisma.listRow.update({
+    where: { id: params.listRowId },
+    data: {
+      stage: "pending",
+      mtnStatus: "error",
+      mtnMessage: params.message,
+      mtnAttempts: { increment: 1 },
+    },
+  });
+
+  await prisma.list.updateMany({
+    where: { id: params.listId, status: { in: ["running_mtn", "running_n2b"] } },
+    data: {
+      status: "failed",
+      lastError: `Could not reach Mail Tester Ninja (${params.message}). No rows were charged to NeverBounce. Retry once connectivity is restored — unchecked rows will re-run on the cheap pass.`,
+    },
+  });
+}
+
 // Rows that exhausted MTN retries on a transient error also fall through to N2B.
 export async function recordMtnExhausted(params: {
   listRowId: string;
@@ -310,6 +350,14 @@ export async function approveN2bSubmission(listId: string) {
   // Re-apply current classification first: never pay to re-ask something
   // MTN already answered definitively.
   await reclassifyParkedRows(listId);
+
+  // Reclassifying can hand rows back to the cheap pass (ones MTN was never
+  // actually reached for). Finish that before spending anything.
+  const stillPending = await prisma.listRow.count({ where: { listId, stage: "pending" } });
+  if (stillPending > 0) {
+    await enqueuePendingRows(listId);
+    return;
+  }
 
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
