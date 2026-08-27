@@ -599,6 +599,11 @@ a > button {
   border-bottom: none;
 }
 
+.row-note {
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
 .dest-n2b {
   font-size: 12px;
   font-weight: 700;

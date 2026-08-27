@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "List" ADD COLUMN     "skippedDupes" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "skippedInvalid" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "sourceRowCount" INTEGER NOT NULL DEFAULT 0;
+

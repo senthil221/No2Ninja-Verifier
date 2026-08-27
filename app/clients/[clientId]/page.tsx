@@ -6,7 +6,7 @@ import { uploadList } from "@/app/actions";
 export const dynamic = "force-dynamic";
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: "Pending",
+  pending: "Ready to start",
   running_mtn: "Running — MTN pass",
   running_n2b: "Running — N2B pass",
   needs_approval: "Needs approval",

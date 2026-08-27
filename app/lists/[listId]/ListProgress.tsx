@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { approveList, retryFailedList, finishListWithoutN2b } from "@/app/actions";
+import {
+  approveList,
+  retryFailedList,
+  finishListWithoutN2b,
+  beginVerification,
+} from "@/app/actions";
 
 interface StatusPayload {
   status: string;
@@ -15,6 +20,13 @@ interface StatusPayload {
   n2bBatches: { id: string; status: string; emailCount: number }[];
   pendingN2b: number;
   pendingN2bReasons: { reason: string; count: number }[];
+  preflight: {
+    sourceRowCount: number;
+    skippedInvalid: number;
+    skippedDupes: number;
+    knownFromCache: number;
+    toVerify: number;
+  };
   breakdown: {
     mtnMessage: string;
     stage: string;
@@ -24,7 +36,7 @@ interface StatusPayload {
   }[];
 }
 
-const TERMINAL_STATUSES = new Set(["completed", "failed", "needs_approval"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "needs_approval", "pending"]);
 const STATUS_COLOR_VAR: Record<string, string> = {
   valid: "--valid",
   invalid: "--invalid",
@@ -38,6 +50,7 @@ export default function ListProgress({ listId }: { listId: string }) {
   const [approving, setApproving] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [finishing, setFinishing] = useState(false);
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +75,73 @@ export default function ListProgress({ listId }: { listId: string }) {
   }, [listId]);
 
   if (!data) return <p className="empty-state">Loading progress…</p>;
+
+  // Nothing has run yet: show what the file actually contained and what will
+  // be verified, rather than an empty progress bar.
+  if (data.status === "pending") {
+    const p = data.preflight;
+    const rows: { label: string; value: number; note?: string; muted?: boolean }[] = [
+      { label: "Rows in file", value: p.sourceRowCount },
+      {
+        label: "Skipped — not a valid address",
+        value: p.skippedInvalid,
+        muted: true,
+      },
+      { label: "Skipped — duplicate", value: p.skippedDupes, muted: true },
+      {
+        label: "Already known from previous lists",
+        value: p.knownFromCache,
+        note: "free — no API call",
+      },
+      { label: "Will be checked by Mail Tester Ninja", value: p.toVerify, note: "free — unlimited plan" },
+    ];
+
+    return (
+      <div>
+        <div className="review-panel" style={{ marginTop: 0 }}>
+          <div className="review-head">
+            <span className="eyebrow">Step 1 of 2 — before we start</span>
+            <h3>
+              {p.toVerify} {p.toVerify === 1 ? "address" : "addresses"} ready to verify
+            </h3>
+          </div>
+
+          <table className="reason-table" style={{ marginTop: 16 }}>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.label}>
+                  <td style={r.muted ? { color: "var(--ink-muted)" } : undefined}>
+                    {r.label}
+                    {r.note && <span className="row-note"> · {r.note}</span>}
+                  </td>
+                  <td className="num" style={{ textAlign: "right" }}>
+                    {r.value}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="review-actions">
+            <button
+              disabled={starting}
+              onClick={async () => {
+                setStarting(true);
+                await beginVerification(listId);
+                setStarting(false);
+              }}
+            >
+              {starting ? "Starting…" : "Start verification"}
+            </button>
+          </div>
+          <div className="meta" style={{ marginTop: 8 }}>
+            This pass is free on your unlimited plan. You&apos;ll get a second checkpoint before
+            anything is sent to NeverBounce.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const pct = data.totalRows > 0 ? Math.round((data.resolved / data.totalRows) * 100) : 0;
   const orderedStatuses = STATUS_ORDER.filter((s) => data.byFinalStatus[s]);

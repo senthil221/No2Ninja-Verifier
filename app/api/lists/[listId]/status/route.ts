@@ -61,6 +61,14 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
     status: list.status,
     lastError: list.lastError,
     totalRows: list.totalRows,
+    // Pre-flight accounting: what was in the file vs what will be verified.
+    preflight: {
+      sourceRowCount: list.sourceRowCount,
+      skippedInvalid: list.skippedInvalid,
+      skippedDupes: list.skippedDupes,
+      knownFromCache: stageCounts.cache_hit ?? 0,
+      toVerify: stageCounts.pending ?? 0,
+    },
     resolved,
     stageCounts,
     byFinalStatus,

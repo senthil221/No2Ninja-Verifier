@@ -3,7 +3,7 @@ import { config } from "./config";
 import { parseEmailCsv } from "./csv";
 import { mtnQueue, n2bPollQueue } from "./queue";
 import { n2bClient, type N2bRowResult } from "./n2b";
-import { classifyMtnMessage } from "./mtn";
+import { classifyMtnResult } from "./mtn";
 import type { FinalStatus, ResultSource } from "@prisma/client";
 
 // ---------- Ingest ----------
@@ -14,7 +14,7 @@ export async function ingestList(params: {
   sourceFileName: string;
   fileContents: string;
 }) {
-  const { headers, rows } = parseEmailCsv(params.fileContents);
+  const { headers, rows, stats } = parseEmailCsv(params.fileContents);
   if (rows.length === 0) {
     throw new Error("No valid email rows found in the uploaded file");
   }
@@ -25,6 +25,9 @@ export async function ingestList(params: {
       name: params.name,
       sourceFileName: params.sourceFileName,
       totalRows: rows.length,
+      sourceRowCount: stats.dataRows,
+      skippedInvalid: stats.invalidSyntax,
+      skippedDupes: stats.duplicates,
       columnHeaders: headers,
       status: "pending",
     },
@@ -39,10 +42,22 @@ export async function ingestList(params: {
     })),
   });
 
+  // Resolve what's already known so the pre-flight summary can show it, but
+  // stop there: nothing runs until the upload has been reviewed and started.
   await runCachePass(list.id);
-  await enqueuePendingRows(list.id);
 
   return list;
+}
+
+// Begins the cheap pass for a list sitting at the pre-flight summary.
+export async function startVerification(listId: string) {
+  const list = await prisma.list.findUnique({
+    where: { id: listId },
+    select: { status: true },
+  });
+  if (!list || list.status !== "pending") return;
+
+  await enqueuePendingRows(listId);
 }
 
 const CACHE_HIT_MAP: Record<string, FinalStatus> = {
@@ -159,11 +174,11 @@ async function reclassifyParkedRows(listId: string) {
 
   const parked = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b", mtnMessage: { not: null } },
-    select: { id: true, normalizedEmail: true, mtnMessage: true },
+    select: { id: true, normalizedEmail: true, mtnMessage: true, mtnStatus: true },
   });
 
   for (const row of parked) {
-    const outcome = classifyMtnMessage(row.mtnMessage!);
+    const outcome = classifyMtnResult(row.mtnStatus ?? "", row.mtnMessage!);
     if (outcome !== "valid" && outcome !== "invalid") continue;
 
     // Respect the current escalation policy: under all_except_valid an
@@ -426,7 +441,7 @@ export async function approveN2bSubmission(listId: string) {
 export async function finishWithoutN2b(listId: string) {
   const parked = await prisma.listRow.findMany({
     where: { listId, stage: { in: ["needs_n2b", "pending"] } },
-    select: { id: true, mtnMessage: true },
+    select: { id: true, mtnMessage: true, mtnStatus: true },
   });
 
   for (const row of parked) {
@@ -434,7 +449,9 @@ export async function finishWithoutN2b(listId: string) {
     // a row it called Rejected really is invalid on the evidence we have, a
     // catch-all domain is genuinely risky, and only rows it never answered
     // are truly unknown.
-    const outcome = row.mtnMessage ? classifyMtnMessage(row.mtnMessage) : "transient";
+    const outcome = row.mtnMessage
+      ? classifyMtnResult(row.mtnStatus ?? "", row.mtnMessage)
+      : "transient";
     const finalStatus: FinalStatus =
       outcome === "valid"
         ? "valid"

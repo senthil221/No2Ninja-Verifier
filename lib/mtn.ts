@@ -28,7 +28,11 @@ export type MtnOutcome = "valid" | "invalid" | "transient" | "ambiguous" | "fata
 // answered definitively, paying the expensive provider for nothing.
 const MESSAGE_OUTCOME: Record<string, MtnOutcome> = {
   accepted: "valid",
-  limited: "valid",
+  // Deliberately not "valid": we have never observed which code accompanies
+  // "Limited", and asserting deliverability we cannot back sends mail to an
+  // unverified address. A bounce costs sender reputation; escalating costs
+  // one credit. When the code is present it decides this anyway.
+  limited: "transient",
   rejected: "invalid",
   "no mx": "invalid",
   "catch-all": "ambiguous",
@@ -42,6 +46,36 @@ function normalize(message: string): string {
   return message.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+// MTN states the contract on `code`: ok = valid, ko = invalid, mb =
+// unverifiable. Prefer it over the message string so a message we have never
+// seen is still categorised by the provider's own verdict rather than by our
+// guess at what the wording means. `message` then refines the unverifiable
+// case, which is the only one where the right next step varies.
+export function classifyMtnResult(code: string, message: string): MtnOutcome {
+  // An account-level failure is not a statement about the address at all.
+  if (isAccountFailure(message)) return "fatal";
+
+  switch (normalize(code)) {
+    case "ok":
+      return "valid";
+    case "ko":
+      return "invalid";
+    case "mb":
+      // Catch-all is answerable by a better provider; the rest (Timeout, MX
+      // Error, SPAM Block) are worth retrying on the cheap pass first.
+      return normalize(message) === "catch-all" ? "ambiguous" : "transient";
+    default:
+      // Unrecognised code -- fall back to reading the message.
+      return classifyMtnMessage(message);
+  }
+}
+
+function isAccountFailure(message: string): boolean {
+  return /\b(key|quota|subscription|credit|expired|suspend|disabled|unauthor)/i.test(message);
+}
+
+// Message-only classification, for rows recorded before the code was stored
+// and as the fallback above.
 export function classifyMtnMessage(message: string): MtnOutcome {
   const known = MESSAGE_OUTCOME[normalize(message)];
   if (known) return known;
@@ -50,9 +84,7 @@ export function classifyMtnMessage(message: string): MtnOutcome {
   // "Expired Subscription", ...) must be treated as fatal, not retried and
   // escalated -- erring toward "stop and tell someone" is far cheaper than
   // erring toward "send the whole list to the paid provider".
-  if (/\b(key|quota|subscription|credit|expired|suspend|disabled|unauthor)/i.test(message)) {
-    return "fatal";
-  }
+  if (isAccountFailure(message)) return "fatal";
   return "transient";
 }
 

@@ -2,7 +2,7 @@ import "dotenv/config";
 import { Worker, type Job } from "bullmq";
 import { redisConnection, type MtnVerifyJobData, type N2bPollJobData } from "../lib/queue";
 import { config, assertProviderKeysConfigured } from "../lib/config";
-import { mtnClient, classifyMtnMessage } from "../lib/mtn";
+import { mtnClient, classifyMtnResult } from "../lib/mtn";
 import {
   recordMtnResult,
   recordMtnExhausted,
@@ -44,7 +44,7 @@ const mtnWorker = new Worker<MtnVerifyJobData>(
     if (await isListInactive(listId)) return;
 
     const result = await mtnClient.verify(email);
-    const outcome = classifyMtnMessage(result.message);
+    const outcome = classifyMtnResult(result.code, result.message);
 
     if (outcome === "fatal") {
       await failListFromMtn(listId, result.message);

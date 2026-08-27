@@ -9,6 +9,7 @@ import {
   retryList,
   deleteList,
   finishWithoutN2b,
+  startVerification,
 } from "@/lib/pipeline";
 
 export async function createClient(formData: FormData) {
@@ -38,6 +39,11 @@ export async function uploadList(clientId: string, formData: FormData) {
 
 export async function approveList(listId: string) {
   await approveN2bSubmission(listId);
+  revalidatePath(`/lists/${listId}`);
+}
+
+export async function beginVerification(listId: string) {
+  await startVerification(listId);
   revalidatePath(`/lists/${listId}`);
 }
 

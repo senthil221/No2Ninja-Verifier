@@ -18,6 +18,14 @@ export interface ParsedRow {
 export interface ParsedCsv {
   headers: string[];
   rows: ParsedRow[];
+  stats: {
+    // Data rows in the file, excluding the header.
+    dataRows: number;
+    // Dropped because the value isn't a syntactically valid address.
+    invalidSyntax: number;
+    // Dropped because the same address (case-insensitively) already appeared.
+    duplicates: number;
+  };
 }
 
 // Parses a CSV, auto-detects the email column by header name (falls back to
@@ -30,7 +38,9 @@ export function parseEmailCsv(fileContents: string): ParsedCsv {
     trim: true,
   }) as Record<string, string>[];
 
-  if (records.length === 0) return { headers: [], rows: [] };
+  if (records.length === 0) {
+    return { headers: [], rows: [], stats: { dataRows: 0, invalidSyntax: 0, duplicates: 0 } };
+  }
 
   const headers = Object.keys(records[0]!);
   const emailHeader =
@@ -40,19 +50,31 @@ export function parseEmailCsv(fileContents: string): ParsedCsv {
 
   const seen = new Set<string>();
   const rows: ParsedRow[] = [];
+  let invalidSyntax = 0;
+  let duplicates = 0;
 
   for (const record of records) {
     const rawEmail = (record[emailHeader] ?? "").trim();
-    if (!rawEmail || !EMAIL_REGEX.test(rawEmail)) continue;
+    if (!rawEmail || !EMAIL_REGEX.test(rawEmail)) {
+      invalidSyntax++;
+      continue;
+    }
 
     const normalizedEmail = normalizeEmail(rawEmail);
-    if (seen.has(normalizedEmail)) continue;
+    if (seen.has(normalizedEmail)) {
+      duplicates++;
+      continue;
+    }
     seen.add(normalizedEmail);
 
     rows.push({ rawEmail, normalizedEmail, rawRow: record });
   }
 
-  return { headers, rows };
+  return {
+    headers,
+    rows,
+    stats: { dataRows: records.length, invalidSyntax, duplicates },
+  };
 }
 
 export interface ExportRow {
