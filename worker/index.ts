@@ -66,6 +66,10 @@ const mtnWorker = new Worker<MtnVerifyJobData>(
   },
   {
     connection: redisConnection,
+    // One at a time, on purpose. MTN temporarily bans keys that issue
+    // simultaneous requests, so the limiter caps the rate while this caps
+    // concurrency -- raising it would trade a working key for a faster one.
+    concurrency: 1,
     limiter: { max: config.mtn.rateLimitMax, duration: config.mtn.rateLimitWindowMs },
   }
 );
