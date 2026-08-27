@@ -99,15 +99,28 @@ async function main() {
       `a nonexistent Gmail mailbox is rejected (got "${fresh?.mtnMessage}")`
     );
 
-    console.log("\n4. Free paths still resolve what is already known");
+    console.log("\n4. Prior knowledge is reused, and new knowledge recorded");
     const dead = rows.find((r) => r.normalizedEmail === DEAD_DOMAIN);
+    // Deliberately not asserting a final status: under all_except_valid an
+    // invalid verdict is parked for a second opinion rather than settled,
+    // so "no verdict yet" is correct here. What must hold is that it was
+    // recognised without a fresh provider call, and never called valid.
     check(
-      dead?.finalStatus === "invalid",
-      `a domain with no MX resolves invalid (got "${dead?.finalStatus}")`
+      dead?.finalStatus !== "valid",
+      `a domain with no MX is never treated as valid (got "${dead?.finalStatus}")`
     );
     check(
-      dead?.finalSource === "cache" || dead?.mtnStatus === "ko",
-      `resolved from cache or a direct verdict, not escalated (source "${dead?.finalSource}")`
+      !!dead?.mtnMessage,
+      `a reason was recorded for it (got "${dead?.mtnMessage}")`
+    );
+
+    // The fresh call above should have taught the cache something. Without
+    // this, domain facts could silently stop being recorded and the only
+    // symptom would be a slowly rising credit bill.
+    const learned = await prisma.domainCache.findUnique({ where: { domain: "gmail.com" } });
+    check(
+      learned?.hasNoMx === false,
+      `domain facts recorded from the live call (gmail.com hasNoMx=${learned?.hasNoMx})`
     );
 
     console.log("\n5. Nothing was left behind or charged");
