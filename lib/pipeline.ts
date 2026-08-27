@@ -4,7 +4,70 @@ import { parseEmailCsv } from "./csv";
 import { mtnQueue, n2bPollQueue } from "./queue";
 import { n2bClient, type N2bRowResult } from "./n2b";
 import { classifyMtnResult } from "./mtn";
+import { sendAlert } from "./alerts";
 import type { FinalStatus, ResultSource } from "@prisma/client";
+
+// ---------- Terminal state transitions ----------
+//
+// Every route into a terminal state goes through one of these, so an alert
+// cannot be forgotten by a future call site. Alerting is best-effort and
+// never blocks the state change itself.
+
+async function markFailed(listId: string, error: string) {
+  const list = await prisma.list.update({
+    where: { id: listId },
+    data: { status: "failed", lastError: error },
+    include: { client: true },
+  });
+  await sendAlert({
+    type: "list_failed",
+    listId,
+    listName: list.name,
+    clientName: list.client.name,
+    error,
+  });
+}
+
+async function markNeedsApproval(listId: string, creditsRequired: number) {
+  const list = await prisma.list.update({
+    where: { id: listId },
+    data: { status: "needs_approval" },
+    include: { client: true },
+  });
+  const resolved = await prisma.listRow.count({
+    where: { listId, finalStatus: { not: null } },
+  });
+  await sendAlert({
+    type: "needs_decision",
+    listId,
+    listName: list.name,
+    clientName: list.client.name,
+    resolved,
+    totalRows: list.totalRows,
+    creditsRequired,
+  });
+}
+
+async function markCompleted(listId: string) {
+  const list = await prisma.list.update({
+    where: { id: listId },
+    data: { status: "completed", completedAt: new Date(), lastError: null },
+    include: { client: true },
+  });
+  const [valid, spend] = await Promise.all([
+    prisma.listRow.count({ where: { listId, finalStatus: "valid" } }),
+    prisma.creditLedger.aggregate({ _sum: { amount: true }, where: { listId, provider: "n2b" } }),
+  ]);
+  await sendAlert({
+    type: "list_completed",
+    listId,
+    listName: list.name,
+    clientName: list.client.name,
+    totalRows: list.totalRows,
+    valid,
+    creditsSpent: spend._sum.amount ?? 0,
+  });
+}
 
 // ---------- Ingest ----------
 
@@ -217,10 +280,7 @@ export async function retryList(listId: string) {
   });
 
   if (needsN2b.length === 0) {
-    await prisma.list.update({
-      where: { id: listId },
-      data: { status: "completed", completedAt: new Date() },
-    });
+    await markCompleted(listId);
     return;
   }
 
@@ -291,13 +351,10 @@ function settleMtnOutcome(outcome: "valid" | "invalid" | "ambiguous"): FinalStat
 // nothing about the addresses themselves. Stop the whole list so a
 // misconfiguration can't quietly escalate every row to the paid provider.
 export async function failListFromMtn(listId: string, mtnMessage: string) {
-  await prisma.list.update({
-    where: { id: listId },
-    data: {
-      status: "failed",
-      lastError: `Mail Tester Ninja rejected the request: "${mtnMessage}". No rows were escalated to NeverBounce. Check MTN_API_KEY.`,
-    },
-  });
+  await markFailed(
+    listId,
+    `Mail Tester Ninja rejected the request: "${mtnMessage}". No rows were escalated to NeverBounce. Check MTN_API_KEY.`
+  );
 }
 
 // True when the list is gone or stopped -- either way its queued jobs should
@@ -334,13 +391,30 @@ export async function recordMtnUnreachable(params: {
     },
   });
 
-  await prisma.list.updateMany({
+  const error = `Could not reach Mail Tester Ninja (${params.message}). No rows were charged to NeverBounce. Retry once connectivity is restored — unchecked rows will re-run on the cheap pass.`;
+
+  // Conditional update is the transition itself: once the list is "failed"
+  // it no longer matches, so an outage affecting thousands of rows moves it
+  // once and alerts once rather than per row.
+  const transitioned = await prisma.list.updateMany({
     where: { id: params.listId, status: { in: ["running_mtn", "running_n2b"] } },
-    data: {
-      status: "failed",
-      lastError: `Could not reach Mail Tester Ninja (${params.message}). No rows were charged to NeverBounce. Retry once connectivity is restored — unchecked rows will re-run on the cheap pass.`,
-    },
+    data: { status: "failed", lastError: error },
   });
+  if (transitioned.count === 0) return;
+
+  const list = await prisma.list.findUnique({
+    where: { id: params.listId },
+    include: { client: true },
+  });
+  if (list) {
+    await sendAlert({
+      type: "list_failed",
+      listId: params.listId,
+      listName: list.name,
+      clientName: list.client.name,
+      error,
+    });
+  }
 }
 
 // Rows that exhausted MTN retries on a transient error also fall through to N2B.
@@ -386,10 +460,7 @@ async function finalizeMtnPass(listId: string) {
   });
 
   if (needsN2b.length === 0) {
-    await prisma.list.update({
-      where: { id: listId },
-      data: { status: "completed", completedAt: new Date() },
-    });
+    await markCompleted(listId);
     return;
   }
 
@@ -397,7 +468,7 @@ async function finalizeMtnPass(listId: string) {
   // this pipeline, so the default is that a person sees what the cheap pass
   // found -- and what the paid pass would cost -- and decides.
   if (config.n2b.requireApproval || needsN2b.length > config.n2b.singleListCreditCap) {
-    await prisma.list.update({ where: { id: listId }, data: { status: "needs_approval" } });
+    await markNeedsApproval(listId, needsN2b.length);
     return;
   }
 
@@ -424,10 +495,7 @@ export async function approveN2bSubmission(listId: string) {
   });
 
   if (needsN2b.length === 0) {
-    await prisma.list.update({
-      where: { id: listId },
-      data: { status: "completed", completedAt: new Date() },
-    });
+    await markCompleted(listId);
     return;
   }
 
@@ -467,10 +535,7 @@ export async function finishWithoutN2b(listId: string) {
     });
   }
 
-  await prisma.list.update({
-    where: { id: listId },
-    data: { status: "completed", completedAt: new Date(), lastError: null },
-  });
+  await markCompleted(listId);
 }
 
 async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmail: string }[]) {
@@ -483,10 +548,7 @@ async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmai
     // A rejected/failed API call must never take the whole worker process
     // down with it -- fail just this list and keep processing everything
     // else.
-    await prisma.list.update({
-      where: { id: listId },
-      data: { status: "failed", lastError: err instanceof Error ? err.message : String(err) },
-    });
+    await markFailed(listId, err instanceof Error ? err.message : String(err));
     return;
   }
 
@@ -542,10 +604,7 @@ export async function pollN2bBatchOnce(batchId: string) {
       where: { id: batchId },
       data: { status: "failed", error: result.error },
     });
-    await prisma.list.update({
-      where: { id: batch.listId },
-      data: { status: "failed", lastError: result.error },
-    });
+    await markFailed(batch.listId, result.error);
     return;
   }
 
@@ -588,10 +647,7 @@ async function applyN2bResults(
     data: { status: "completed", completedAt: new Date(), resultUrl: resultUrl ?? null },
   });
 
-  await prisma.list.update({
-    where: { id: listId },
-    data: { status: "completed", completedAt: new Date() },
-  });
+  await markCompleted(listId);
 }
 
 async function upsertEmailCache(

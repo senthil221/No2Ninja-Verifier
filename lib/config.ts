@@ -77,6 +77,13 @@ export const config = {
     : "all_except_valid") as "all_except_valid" | "unresolved",
 
   emailCacheTtlDays: int("EMAIL_CACHE_TTL_DAYS", 90),
+
+  // Where pipeline events are posted. A webhook rather than email/Slack
+  // directly, so routing (who gets told, and how) stays a workflow concern
+  // rather than something baked into this app.
+  alertWebhookUrl: (process.env.ALERT_WEBHOOK_URL ?? "").trim(),
+  // Used to build clickable links in alerts.
+  publicUrl: (process.env.PUBLIC_URL ?? "").trim(),
 };
 
 export function assertProviderKeysConfigured() {

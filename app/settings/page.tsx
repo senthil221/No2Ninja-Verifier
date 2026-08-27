@@ -57,6 +57,18 @@ export default function SettingsPage() {
       </div>
 
       <div className="card">
+        <h2>Alerting</h2>
+        <div className="kv-row">
+          <span className="k">Webhook</span>
+          <code>{config.alertWebhookUrl ? "configured" : "not set — alerts disabled"}</code>
+        </div>
+        <div className="kv-row">
+          <span className="k">Events sent</span>
+          <code>list_failed · needs_decision · list_completed</code>
+        </div>
+      </div>
+
+      <div className="card">
         <h2>Pipeline behavior</h2>
         <div className="kv-row">
           <span className="k">Sent on to NeverBounce</span>
