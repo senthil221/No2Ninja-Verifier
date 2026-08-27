@@ -4,8 +4,16 @@ import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
+const ACTIVE_LABEL: Record<string, string> = {
+  pending: "Awaiting start",
+  running_mtn: "Ninja pass",
+  running_n2b: "NeverBounce pass",
+  needs_approval: "Needs your decision",
+  failed: "Stopped",
+};
+
 export default async function HomePage() {
-  const [clients, n2bSpend, cacheHits, totalRows] = await Promise.all([
+  const [clients, n2bSpend, cacheHits, totalRows, needsAttention] = await Promise.all([
     prisma.client.findMany({
       orderBy: { createdAt: "desc" },
       include: { _count: { select: { lists: true } } },
@@ -13,6 +21,14 @@ export default async function HomePage() {
     prisma.creditLedger.aggregate({ _sum: { amount: true }, where: { provider: "n2b" } }),
     prisma.listRow.count({ where: { finalSource: "cache" } }),
     prisma.listRow.count(),
+    // Anything in flight or waiting on a person -- with several lists running
+    // at once, this is the only place that shows them together.
+    prisma.list.findMany({
+      where: { status: { in: ["pending", "running_mtn", "running_n2b", "needs_approval", "failed"] } },
+      include: { client: true },
+      orderBy: { createdAt: "desc" },
+      take: 12,
+    }),
   ]);
 
   return (
@@ -40,6 +56,39 @@ export default async function HomePage() {
           </div>
         </div>
       </div>
+
+      {needsAttention.length > 0 && (
+        <div className="card">
+          <h2>In progress</h2>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>List</th>
+                <th>Client</th>
+                <th>Stage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {needsAttention.map((l) => (
+                <tr key={l.id}>
+                  <td>
+                    <Link href={`/lists/${l.id}`} className="row-link">
+                      {l.name}
+                    </Link>
+                  </td>
+                  <td className="meta">{l.client.name}</td>
+                  <td>
+                    <span className={`pill pill-${l.status}`}>
+                      <span className="pill-dot" />
+                      {ACTIVE_LABEL[l.status] ?? l.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       <div className="card">
         <h2>Add a client</h2>

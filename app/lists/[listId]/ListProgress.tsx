@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   approveList,
   retryFailedList,
@@ -17,7 +17,6 @@ interface StatusPayload {
   byFinalStatus: Record<string, number>;
   bySource: Record<string, number>;
   n2bCreditsSpent: number;
-  n2bBatches: { id: string; status: string; emailCount: number }[];
   pendingN2b: number;
   pendingN2bReasons: { reason: string; count: number }[];
   preflight: {
@@ -36,7 +35,12 @@ interface StatusPayload {
   }[];
 }
 
-const TERMINAL_STATUSES = new Set(["completed", "failed", "needs_approval", "pending"]);
+// Statuses where nothing moves without a person acting. Polling pauses here
+// to avoid pointless requests, and every action resumes it -- forgetting
+// that is what previously left the page frozen after "Start verification".
+const AWAITING_ACTION = new Set(["pending", "needs_approval", "failed"]);
+const FINISHED = new Set(["completed"]);
+
 const STATUS_COLOR_VAR: Record<string, string> = {
   valid: "--valid",
   invalid: "--invalid",
@@ -45,25 +49,118 @@ const STATUS_COLOR_VAR: Record<string, string> = {
 };
 const STATUS_ORDER = ["valid", "invalid", "risky", "unknown"];
 
+const STATUS_MEANING: Record<string, string> = {
+  valid: "Mailbox confirmed. Safe to send.",
+  invalid: "Confirmed undeliverable. Remove before sending.",
+  risky: "Catch-all domain — accepts anything, so delivery is unconfirmed.",
+  unknown: "Could not be determined by either provider.",
+};
+
+const STEPS = [
+  { key: "preflight", label: "Pre-flight" },
+  { key: "mtn", label: "Mail Tester Ninja" },
+  { key: "review", label: "Your review" },
+  { key: "n2b", label: "NeverBounce" },
+  { key: "done", label: "Done" },
+];
+
+function stepIndexFor(status: string): number {
+  switch (status) {
+    case "pending":
+      return 0;
+    case "running_mtn":
+      return 1;
+    case "needs_approval":
+      return 2;
+    case "running_n2b":
+      return 3;
+    case "completed":
+      return 4;
+    default:
+      return 1;
+  }
+}
+
+function Stepper({ status }: { status: string }) {
+  const current = stepIndexFor(status);
+  const failed = status === "failed";
+
+  return (
+    <ol className="stepper" aria-label="Verification pipeline">
+      {STEPS.map((s, i) => {
+        const state =
+          failed && i === current ? "error" : i < current ? "done" : i === current ? "active" : "todo";
+        return (
+          <li key={s.key} className={`step step-${state}`}>
+            <span className="step-dot" aria-hidden="true">
+              {state === "done" ? "✓" : state === "error" ? "!" : i + 1}
+            </span>
+            <span className="step-label">{s.label}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ExportMenu({ listId, counts }: { listId: string; counts: Record<string, number> }) {
+  const valid = counts.valid ?? 0;
+  const risky = counts.risky ?? 0;
+  const invalid = counts.invalid ?? 0;
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+
+  const options = [
+    { filter: "valid", label: "Valid only", note: "ready to send", count: valid, primary: true },
+    {
+      filter: "sendable",
+      label: "Valid + catch-all",
+      note: "wider reach, unconfirmed",
+      count: valid + risky,
+    },
+    { filter: "all", label: "Everything", note: "full results", count: total },
+    { filter: "bad", label: "Invalid only", note: "for suppression", count: invalid },
+  ];
+
+  return (
+    <div className="export-grid">
+      {options.map((o) => (
+        <a
+          key={o.filter}
+          className={`export-card${o.primary ? " export-card-primary" : ""}`}
+          href={`/api/lists/${listId}/export?filter=${o.filter}`}
+        >
+          <span className="export-count num">{o.count}</span>
+          <span className="export-label">{o.label}</span>
+          <span className="export-note">{o.note}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export default function ListProgress({ listId }: { listId: string }) {
   const [data, setData] = useState<StatusPayload | null>(null);
-  const [approving, setApproving] = useState(false);
-  const [retrying, setRetrying] = useState(false);
-  const [finishing, setFinishing] = useState(false);
-  const [starting, setStarting] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  // Bumped after every action so the poll loop restarts immediately rather
+  // than waiting for a manual refresh.
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
 
     async function poll() {
-      const res = await fetch(`/api/lists/${listId}/status`, { cache: "no-store" });
-      if (!res.ok || cancelled) return;
-      const json: StatusPayload = await res.json();
-      if (cancelled) return;
-      setData(json);
-      if (!TERMINAL_STATUSES.has(json.status)) {
-        timer = setTimeout(poll, 3000);
+      try {
+        const res = await fetch(`/api/lists/${listId}/status`, { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const json: StatusPayload = await res.json();
+        if (cancelled) return;
+        setData(json);
+        if (!AWAITING_ACTION.has(json.status) && !FINISHED.has(json.status)) {
+          timer = setTimeout(poll, 2000);
+        }
+      } catch {
+        if (!cancelled) timer = setTimeout(poll, 5000);
       }
     }
     poll();
@@ -72,140 +169,242 @@ export default function ListProgress({ listId }: { listId: string }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [listId]);
+  }, [listId, tick]);
 
-  if (!data) return <p className="empty-state">Loading progress…</p>;
+  // Every action runs through here so none can forget to resume polling.
+  const run = useCallback(async (key: string, action: () => Promise<void>) => {
+    setBusy(key);
+    try {
+      await action();
+    } finally {
+      setBusy(null);
+      setTick((t) => t + 1);
+    }
+  }, []);
 
-  // Nothing has run yet: show what the file actually contained and what will
-  // be verified, rather than an empty progress bar.
-  if (data.status === "pending") {
-    const p = data.preflight;
-    const rows: { label: string; value: number; note?: string; muted?: boolean }[] = [
-      { label: "Rows in file", value: p.sourceRowCount },
-      {
-        label: "Skipped — not a valid address",
-        value: p.skippedInvalid,
-        muted: true,
-      },
-      { label: "Skipped — duplicate", value: p.skippedDupes, muted: true },
-      {
-        label: "Already known from previous lists",
-        value: p.knownFromCache,
-        note: "free — no API call",
-      },
-      { label: "Will be checked by Mail Tester Ninja", value: p.toVerify, note: "free — unlimited plan" },
-    ];
+  if (!data) return <p className="empty-state">Loading…</p>;
 
-    return (
-      <div>
-        <div className="review-panel" style={{ marginTop: 0 }}>
-          <div className="review-head">
-            <span className="eyebrow">Step 1 of 2 — before we start</span>
-            <h3>
-              {p.toVerify} {p.toVerify === 1 ? "address" : "addresses"} ready to verify
-            </h3>
-          </div>
-
-          <table className="reason-table" style={{ marginTop: 16 }}>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.label}>
-                  <td style={r.muted ? { color: "var(--ink-muted)" } : undefined}>
-                    {r.label}
-                    {r.note && <span className="row-note"> · {r.note}</span>}
-                  </td>
-                  <td className="num" style={{ textAlign: "right" }}>
-                    {r.value}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div className="review-actions">
-            <button
-              disabled={starting}
-              onClick={async () => {
-                setStarting(true);
-                await beginVerification(listId);
-                setStarting(false);
-              }}
-            >
-              {starting ? "Starting…" : "Start verification"}
-            </button>
-          </div>
-          <div className="meta" style={{ marginTop: 8 }}>
-            This pass is free on your unlimited plan. You&apos;ll get a second checkpoint before
-            anything is sent to NeverBounce.
-          </div>
-        </div>
-      </div>
-    );
-  }
-
+  const p = data.preflight;
   const pct = data.totalRows > 0 ? Math.round((data.resolved / data.totalRows) * 100) : 0;
   const orderedStatuses = STATUS_ORDER.filter((s) => data.byFinalStatus[s]);
+  const running = data.status === "running_mtn" || data.status === "running_n2b";
 
   return (
     <div>
-      <div className="legend">
-        {orderedStatuses.map((status) => (
-          <div className="legend-item" key={status}>
-            <span
-              className="legend-dot"
-              style={{ background: `var(${STATUS_COLOR_VAR[status]})` }}
-            />
-            <span className="num">{data.byFinalStatus[status]}</span> {status}
+      <Stepper status={data.status} />
+
+      {/* ---------- Step 1: pre-flight ---------- */}
+      {data.status === "pending" && (
+        <div className="panel-action">
+          <h3 className="panel-title">
+            {p.toVerify} {p.toVerify === 1 ? "address" : "addresses"} ready to verify
+          </h3>
+          <table className="reason-table">
+            <tbody>
+              <tr>
+                <td>Rows in file</td>
+                <td className="num right">{p.sourceRowCount}</td>
+              </tr>
+              <tr className="muted-row">
+                <td>Skipped — not a valid address</td>
+                <td className="num right">{p.skippedInvalid}</td>
+              </tr>
+              <tr className="muted-row">
+                <td>Skipped — duplicate</td>
+                <td className="num right">{p.skippedDupes}</td>
+              </tr>
+              <tr>
+                <td>
+                  Already known from previous lists
+                  <span className="row-note"> · free</span>
+                </td>
+                <td className="num right">{p.knownFromCache}</td>
+              </tr>
+              <tr>
+                <td>
+                  <strong>Will be checked by Mail Tester Ninja</strong>
+                  <span className="row-note"> · free, unlimited plan</span>
+                </td>
+                <td className="num right">
+                  <strong>{p.toVerify}</strong>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div className="review-actions">
+            <button
+              disabled={busy !== null}
+              onClick={() => run("start", () => beginVerification(listId))}
+            >
+              {busy === "start" ? "Starting…" : "Start verification"}
+            </button>
           </div>
-        ))}
-      </div>
+          <p className="meta">
+            You&apos;ll get another checkpoint before anything is sent to NeverBounce.
+          </p>
+        </div>
+      )}
 
-      <div className="progress-track">
-        {orderedStatuses.map((status) => (
-          <span
-            key={status}
-            style={{
-              width: `${(data.byFinalStatus[status]! / data.totalRows) * 100}%`,
-              background: `var(${STATUS_COLOR_VAR[status]})`,
-            }}
-          />
-        ))}
-      </div>
-      <p className="meta">
-        <span className="num">{data.resolved}</span> / <span className="num">{data.totalRows}</span> resolved
-        (<span className="num">{pct}</span>%)
-      </p>
+      {/* ---------- Live progress ---------- */}
+      {data.status !== "pending" && (
+        <>
+          <div className="progress-head">
+            <span className="progress-count num">
+              {data.resolved} / {data.totalRows}
+            </span>
+            <span className="meta">
+              resolved ({pct}%){running && <span className="live-dot" aria-label="running" />}
+            </span>
+          </div>
 
-      <div className="stat-row">
-        <div className="stat">
-          <span className="value num">{data.bySource.cache ?? 0}</span>
-          <span className="label">From cache</span>
-        </div>
-        <div className="stat">
-          <span className="value num">{data.bySource.mtn ?? 0}</span>
-          <span className="label">From MTN</span>
-        </div>
-        <div className="stat">
-          <span className="value num">{data.bySource.n2b ?? 0}</span>
-          <span className="label">From N2B</span>
-        </div>
-        <div className="stat">
-          <span className="value num">{data.n2bCreditsSpent}</span>
-          <span className="label">N2B credits</span>
-        </div>
-      </div>
+          <div className="progress-track">
+            {orderedStatuses.map((s) => (
+              <span
+                key={s}
+                style={{
+                  width: `${(data.byFinalStatus[s]! / data.totalRows) * 100}%`,
+                  background: `var(${STATUS_COLOR_VAR[s]})`,
+                }}
+              />
+            ))}
+          </div>
 
+          <div className="result-cards">
+            {STATUS_ORDER.map((s) => (
+              <div key={s} className={`result-card result-${s}`}>
+                <span className="result-count num">{data.byFinalStatus[s] ?? 0}</span>
+                <span className="result-name">{s}</span>
+                <span className="result-meaning">{STATUS_MEANING[s]}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="source-line">
+            <span>
+              <span className="num">{data.bySource.cache ?? 0}</span> from cache
+            </span>
+            <span>
+              <span className="num">{data.bySource.mtn ?? 0}</span> from Ninja
+            </span>
+            <span>
+              <span className="num">{data.bySource.n2b ?? 0}</span> from NeverBounce
+            </span>
+            <span>
+              <span className="num">{data.n2bCreditsSpent}</span> credits used
+            </span>
+          </div>
+        </>
+      )}
+
+      {/* ---------- Step 3: review gate ---------- */}
+      {data.status === "needs_approval" && (
+        <div className="panel-action panel-decision">
+          <span className="eyebrow">Your decision</span>
+          <h3 className="panel-title">Mail Tester Ninja finished. Continue to NeverBounce?</h3>
+
+          <div className="review-split">
+            <div>
+              <div className="review-label">Resolved — no further cost</div>
+              <div className="review-figure num">{data.resolved}</div>
+              <div className="meta">of {data.totalRows} rows</div>
+            </div>
+            <div>
+              <div className="review-label">Would cost credits</div>
+              <div className="review-figure num accent">{data.pendingN2b}</div>
+              <div className="meta">1 credit per address</div>
+            </div>
+          </div>
+
+          {data.pendingN2bReasons.length > 0 && (
+            <table className="reason-table">
+              <thead>
+                <tr>
+                  <th>Why it&apos;s unresolved</th>
+                  <th className="right">Rows</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.pendingN2bReasons.map((r) => (
+                  <tr key={r.reason}>
+                    <td>{r.reason}</td>
+                    <td className="num right">{r.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="review-actions">
+            <button
+              disabled={busy !== null}
+              onClick={() => run("approve", () => approveList(listId))}
+            >
+              {busy === "approve" ? "Submitting…" : `Verify ${data.pendingN2b} with NeverBounce`}
+            </button>
+            <button
+              className="btn-quiet"
+              disabled={busy !== null}
+              onClick={() => run("finish", () => finishListWithoutN2b(listId))}
+            >
+              {busy === "finish" ? "Finishing…" : "Finish without NeverBounce"}
+            </button>
+          </div>
+          <p className="meta">
+            Finishing keeps every result found so far and spends nothing. Unresolved rows are
+            marked risky or unknown.
+          </p>
+        </div>
+      )}
+
+      {/* ---------- Failure ---------- */}
+      {data.status === "failed" && (
+        <div className="error-banner">
+          <strong>This list stopped before finishing.</strong>
+          {data.lastError && <div className="meta">{data.lastError}</div>}
+          <div className="meta">
+            Everything already verified is kept — retrying resumes where it stopped and re-checks
+            nothing you&apos;ve paid for.
+          </div>
+          <div className="review-actions">
+            <button
+              disabled={busy !== null}
+              onClick={() => run("retry", () => retryFailedList(listId))}
+            >
+              {busy === "retry" ? "Retrying…" : "Retry"}
+            </button>
+            <button
+              className="btn-quiet"
+              disabled={busy !== null}
+              onClick={() => run("finish", () => finishListWithoutN2b(listId))}
+            >
+              {busy === "finish" ? "Finishing…" : "Finish without NeverBounce"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ---------- Export ---------- */}
+      {(data.status === "completed" || data.status === "failed") && (
+        <div className="section">
+          <h3 className="section-title">Export</h3>
+          <p className="meta section-sub">
+            One file, both providers merged. Every row keeps your original columns plus its
+            status and which engine resolved it.
+          </p>
+          <ExportMenu listId={listId} counts={data.byFinalStatus} />
+        </div>
+      )}
+
+      {/* ---------- Full accounting ---------- */}
       {data.breakdown.length > 0 && (
-        <div style={{ marginTop: 22 }}>
-          <div className="review-label" style={{ marginBottom: 8 }}>
-            Every row accounted for
-          </div>
+        <div className="section">
+          <h3 className="section-title">Every row accounted for</h3>
           <table className="reason-table">
             <thead>
               <tr>
-                <th>Mail Tester Ninja said</th>
-                <th>Result</th>
-                <th style={{ textAlign: "right" }}>Rows</th>
+                <th>Provider response</th>
+                <th>Outcome</th>
+                <th className="right">Rows</th>
               </tr>
             </thead>
             <tbody>
@@ -221,134 +420,12 @@ export default function ListProgress({ listId }: { listId: string }) {
                       </span>
                     )}
                   </td>
-                  <td className="num" style={{ textAlign: "right" }}>
-                    {b.count}
-                  </td>
+                  <td className="num right">{b.count}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      )}
-
-      {data.status === "needs_approval" && (
-        <div className="review-panel">
-          <div className="review-head">
-            <span className="eyebrow">Step 2 of 2 — your decision</span>
-            <h3>Mail Tester Ninja finished. Continue to NeverBounce?</h3>
-          </div>
-
-          <div className="review-split">
-            <div>
-              <div className="review-label">Already resolved — no further cost</div>
-              <div className="review-figure num">{data.resolved}</div>
-              <div className="meta">
-                of {data.totalRows} rows, via cache and Mail Tester Ninja
-              </div>
-            </div>
-            <div>
-              <div className="review-label">Would cost NeverBounce credits</div>
-              <div className="review-figure num accent">{data.pendingN2b}</div>
-              <div className="meta">
-                {data.pendingN2b === 1 ? "credit" : "credits"} to resolve the rest
-              </div>
-            </div>
-          </div>
-
-          {data.pendingN2bReasons.length > 0 && (
-            <table className="reason-table">
-              <thead>
-                <tr>
-                  <th>Why it's unresolved</th>
-                  <th style={{ textAlign: "right" }}>Rows</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.pendingN2bReasons.map((r) => (
-                  <tr key={r.reason}>
-                    <td>{r.reason}</td>
-                    <td className="num" style={{ textAlign: "right" }}>
-                      {r.count}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          <div className="review-actions">
-            <button
-              disabled={approving || finishing}
-              onClick={async () => {
-                setApproving(true);
-                await approveList(listId);
-                setApproving(false);
-              }}
-            >
-              {approving
-                ? "Submitting…"
-                : `Verify ${data.pendingN2b} with NeverBounce`}
-            </button>
-            <button
-              className="btn-quiet"
-              disabled={approving || finishing}
-              onClick={async () => {
-                setFinishing(true);
-                await finishListWithoutN2b(listId);
-                setFinishing(false);
-              }}
-            >
-              {finishing ? "Finishing…" : "Finish without NeverBounce"}
-            </button>
-          </div>
-          <div className="meta" style={{ marginTop: 8 }}>
-            Finishing keeps every result found so far and spends nothing. Unresolved rows are
-            marked <code>risky</code> (catch-all domains) or <code>unknown</code>, and the list
-            becomes exportable.
-          </div>
-        </div>
-      )}
-
-      {data.status === "failed" && (
-        <div className="error-banner" style={{ marginTop: 20 }}>
-          This list stopped before finishing.
-          {data.lastError && <div className="meta" style={{ marginTop: 4 }}>{data.lastError}</div>}
-          <div className="meta" style={{ marginTop: 8 }}>
-            Results already verified are kept — retrying resumes from where it stopped and
-            re-checks nothing you've already paid for.
-          </div>
-          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button
-              disabled={retrying || finishing}
-              onClick={async () => {
-                setRetrying(true);
-                await retryFailedList(listId);
-                setRetrying(false);
-              }}
-            >
-              {retrying ? "Retrying…" : "Retry"}
-            </button>
-            <button
-              className="btn-quiet"
-              disabled={retrying || finishing}
-              onClick={async () => {
-                setFinishing(true);
-                await finishListWithoutN2b(listId);
-                setFinishing(false);
-              }}
-            >
-              {finishing ? "Finishing…" : "Finish without NeverBounce"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {(data.status === "completed" || data.status === "failed") && (
-        <a href={`/api/lists/${listId}/export`} style={{ display: "inline-block", marginTop: 12 }}>
-          <button>
-            {data.status === "completed" ? "Download results CSV" : "Download partial results"}
-          </button>
-        </a>
       )}
     </div>
   );

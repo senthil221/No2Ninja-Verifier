@@ -21,20 +21,31 @@ export async function createClient(formData: FormData) {
 }
 
 export async function uploadList(clientId: string, formData: FormData) {
-  const file = formData.get("file") as File | null;
+  const files = formData.getAll("file").filter((f): f is File => f instanceof File && f.size > 0);
   const name = String(formData.get("name") ?? "").trim();
-  if (!file || file.size === 0) throw new Error("A CSV file is required");
+  if (files.length === 0) throw new Error("At least one CSV file is required");
 
-  const fileContents = await file.text();
-  const list = await ingestList({
-    clientId,
-    name: name || file.name,
-    sourceFileName: file.name,
-    fileContents,
-  });
+  // Each file becomes its own list so they can be reviewed and exported
+  // independently. They all draw on the same rate-limited queue, so
+  // uploading several at once is safe -- they interleave rather than
+  // competing.
+  const created: string[] = [];
+  for (const file of files) {
+    const list = await ingestList({
+      clientId,
+      // A custom name only makes sense for a single file; with several,
+      // the filename is the only thing that tells them apart.
+      name: files.length === 1 && name ? name : file.name,
+      sourceFileName: file.name,
+      fileContents: await file.text(),
+    });
+    created.push(list.id);
+  }
 
   revalidatePath(`/clients/${clientId}`);
-  redirect(`/lists/${list.id}`);
+  // One file: go straight to it. Several: the client page shows them all.
+  if (created.length === 1) redirect(`/lists/${created[0]}`);
+  redirect(`/clients/${clientId}`);
 }
 
 export async function approveList(listId: string) {

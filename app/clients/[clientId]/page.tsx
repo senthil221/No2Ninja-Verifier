@@ -36,14 +36,23 @@ export default async function ClientPage({ params }: { params: { clientId: strin
         <h2>Upload a list</h2>
         <form action={uploadForClient}>
           <div className="field">
-            <label htmlFor="name">List name</label>
-            <input type="text" id="name" name="name" placeholder="Optional — defaults to filename" />
+            <label htmlFor="file">CSV files</label>
+            <input type="file" id="file" name="file" accept=".csv" multiple required />
+            <p className="meta">
+              Select several at once — each becomes its own list and they queue together, sharing
+              the same rate limit.
+            </p>
           </div>
           <div className="field">
-            <label htmlFor="file">CSV file</label>
-            <input type="file" id="file" name="file" accept=".csv" required />
+            <label htmlFor="name">List name</label>
+            <input
+              type="text"
+              id="name"
+              name="name"
+              placeholder="Optional — ignored when uploading multiple files"
+            />
           </div>
-          <button type="submit">Upload &amp; start verification</button>
+          <button type="submit">Upload</button>
         </form>
       </div>
 
