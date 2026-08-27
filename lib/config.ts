@@ -18,12 +18,32 @@ function credential(name: string): string {
   return (process.env[name] ?? "").trim().replace(/^["'{]+|["'}]+$/g, "").trim();
 }
 
+// `new URL()` accepts any scheme, so a typo like "htt1ps://" parses fine and
+// only surfaces later as an opaque "fetch failed" on every single row. Check
+// the scheme up front so a bad URL is a startup error naming the variable,
+// not a per-row mystery.
+function endpoint(name: string, fallback: string): string {
+  const raw = (process.env[name] ?? "").trim().replace(/^["']|["']$/g, "") || fallback;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${name} is not a valid URL: ${JSON.stringify(raw)}`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(
+      `${name} must start with https:// (got ${JSON.stringify(parsed.protocol)} in ${JSON.stringify(raw)})`
+    );
+  }
+  return raw;
+}
+
 export const config = {
   redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
 
   mtn: {
     apiKey: credential("MTN_API_KEY"),
-    baseUrl: process.env.MTN_BASE_URL ?? "https://happy.mailtester.ninja/ninja",
+    baseUrl: endpoint("MTN_BASE_URL", "https://happy.mailtester.ninja/ninja"),
     rateLimitMax: int("MTN_RATE_LIMIT_MAX", 57),
     rateLimitWindowMs: int("MTN_RATE_LIMIT_WINDOW_MS", 10_000),
     maxRetries: int("MTN_MAX_RETRIES", 3),
@@ -31,7 +51,7 @@ export const config = {
 
   n2b: {
     apiToken: credential("N2B_API_TOKEN"),
-    baseUrl: process.env.N2B_BASE_URL ?? "https://connect.no2bounce.com/v2/n2b_validate_bulk",
+    baseUrl: endpoint("N2B_BASE_URL", "https://connect.no2bounce.com/v2/n2b_validate_bulk"),
     pollIntervalMs: int("N2B_POLL_INTERVAL_MS", 15_000),
     singleListCreditCap: int("N2B_SINGLE_LIST_CREDIT_CAP", 5000),
     // Every list pauses after the cheap pass so a human sees what it found
