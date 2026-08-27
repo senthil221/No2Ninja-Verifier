@@ -10,6 +10,7 @@ import {
   deleteList,
   finishWithoutN2b,
   startVerification,
+  stopList,
 } from "@/lib/pipeline";
 import { getSessionUser } from "@/lib/auth";
 
@@ -72,6 +73,12 @@ export async function beginVerification(listId: string) {
 export async function finishListWithoutN2b(listId: string) {
   await assertSignedIn();
   await finishWithoutN2b(listId);
+  revalidatePath(`/lists/${listId}`);
+}
+
+export async function stopVerification(listId: string) {
+  await assertSignedIn();
+  await stopList(listId);
   revalidatePath(`/lists/${listId}`);
 }
 

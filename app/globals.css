@@ -1131,3 +1131,7 @@ a > button {
 .kv-row .k {
   color: var(--ink-muted);
 }
+
+.running-actions {
+  margin: 14px 0 4px;
+}

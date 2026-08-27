@@ -14,6 +14,7 @@ enum ListStatus {
   needs_approval
   completed
   failed
+  stopped
 }
 
 enum RowStage {
@@ -144,6 +145,26 @@ model EmailCache {
   lastN2bResult    String?
   lastN2bCheckedAt DateTime?
   updatedAt        DateTime  @updatedAt
+}
+
+// Some answers are properties of the domain's mail server, not of any one
+// address: a domain with no MX cannot receive mail at all, and a catch-all
+// domain accepts every address by definition. Establishing those once and
+// reusing them is the difference between paying per address and paying per
+// domain -- a list of 500 prospects across 200 companies has far fewer
+// distinct domains than addresses.
+model DomainCache {
+  domain String @id
+  // Null = not yet established. Kept separate from a plain boolean so
+  // "unknown" is never mistaken for "no".
+  isCatchAll Boolean?
+  hasNoMx    Boolean?
+  // Which provider established catch-all. NeverBounce reports it directly
+  // and is treated as authoritative; Mail Tester Ninja's view is a strong
+  // hint but is confirmed before it is used to skip paid checks.
+  catchAllSource String?
+  observations   Int      @default(0)
+  updatedAt      DateTime @updatedAt
 }
 
 model N2bBatch {

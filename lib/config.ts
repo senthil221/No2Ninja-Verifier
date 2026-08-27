@@ -85,6 +85,12 @@ export const config = {
 
   emailCacheTtlDays: int("EMAIL_CACHE_TTL_DAYS", 90),
 
+  // Reuse of domain-level facts (no-MX, confirmed catch-all). Shorter TTL
+  // than the address cache because a domain's mail configuration can change
+  // in a way an individual mailbox result cannot.
+  domainCacheEnabled: process.env.DOMAIN_CACHE_ENABLED !== "false",
+  domainCacheTtlDays: int("DOMAIN_CACHE_TTL_DAYS", 45),
+
   // Where pipeline events are posted. A webhook rather than email/Slack
   // directly, so routing (who gets told, and how) stays a workflow concern
   // rather than something baked into this app.

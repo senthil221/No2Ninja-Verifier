@@ -6,6 +6,7 @@ import {
   retryFailedList,
   finishListWithoutN2b,
   beginVerification,
+  stopVerification,
 } from "@/app/actions";
 
 interface StatusPayload {
@@ -39,7 +40,7 @@ interface StatusPayload {
 // Statuses where nothing moves without a person acting. Polling pauses here
 // to avoid pointless requests, and every action resumes it -- forgetting
 // that is what previously left the page frozen after "Start verification".
-const AWAITING_ACTION = new Set(["pending", "needs_approval", "failed"]);
+const AWAITING_ACTION = new Set(["pending", "needs_approval", "failed", "stopped"]);
 const FINISHED = new Set(["completed"]);
 
 const STATUS_COLOR_VAR: Record<string, string> = {
@@ -92,7 +93,7 @@ function stepIndexFor(status: string): number {
 
 function Stepper({ status }: { status: string }) {
   const current = stepIndexFor(status);
-  const failed = status === "failed";
+  const failed = status === "failed" || status === "stopped";
 
   return (
     <ol className="stepper" aria-label="Verification pipeline">
@@ -296,6 +297,18 @@ export default function ListProgress({ listId }: { listId: string }) {
             ))}
           </div>
 
+          {running && (
+            <div className="running-actions">
+              <button
+                className="btn-quiet"
+                disabled={busy !== null}
+                onClick={() => run("stop", () => stopVerification(listId))}
+              >
+                {busy === "stop" ? "Stopping…" : "Stop verification"}
+              </button>
+            </div>
+          )}
+
           <div className="source-line">
             <span>
               <span className="num">{data.bySource.cache ?? 0}</span> from cache
@@ -373,6 +386,32 @@ export default function ListProgress({ listId }: { listId: string }) {
         </div>
       )}
 
+      {/* ---------- Stopped by hand ---------- */}
+      {data.status === "stopped" && (
+        <div className="panel-action">
+          <h3 className="panel-title">Verification stopped</h3>
+          <p className="meta">
+            Nothing further is being checked or charged. Everything verified so far is kept —
+            resuming continues from where it left off and re-checks nothing.
+          </p>
+          <div className="review-actions">
+            <button
+              disabled={busy !== null}
+              onClick={() => run("retry", () => retryFailedList(listId))}
+            >
+              {busy === "retry" ? "Resuming…" : "Resume"}
+            </button>
+            <button
+              className="btn-quiet"
+              disabled={busy !== null}
+              onClick={() => run("finish", () => finishListWithoutN2b(listId))}
+            >
+              {busy === "finish" ? "Finishing…" : "Finish with what we have"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ---------- Failure ---------- */}
       {data.status === "failed" && (
         <div className="error-banner">
@@ -401,7 +440,7 @@ export default function ListProgress({ listId }: { listId: string }) {
       )}
 
       {/* ---------- Export ---------- */}
-      {(data.status === "completed" || data.status === "failed") && (
+      {(data.status === "completed" || data.status === "failed" || data.status === "stopped") && (
         <div className="section">
           <h3 className="section-title">Export</h3>
           <p className="meta section-sub">

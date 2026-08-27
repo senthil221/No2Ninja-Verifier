@@ -14,6 +14,10 @@ export interface N2bRowResult {
   // Normalized to the pipeline's own vocabulary -- see mapN2bStatus below.
   status: "valid" | "invalid" | "risky" | "unknown";
   rawStatus: string;
+  // The report's own catch-all flag. This is a fact about the domain, not
+  // the address, which is what makes it reusable across every other address
+  // at that domain.
+  catchAll: boolean | null;
 }
 
 function authHeaders() {
@@ -140,13 +144,18 @@ export function parseResultCsv(text: string): N2bRowResult[] {
     );
   })();
 
+  const catchAllIdx = headers.findIndex((h) => h.includes("catchall") || h.includes("catch_all"));
+
   return lines
     .filter((line) => line.trim().length > 0)
     .map((line) => {
       const cols = splitCsvLine(line);
       const email = (cols[emailIdx] ?? "").trim();
       const rawStatus = (cols[statusIdx] ?? "").trim();
-      return { email, status: mapN2bStatus(rawStatus), rawStatus };
+      const catchAllRaw = catchAllIdx >= 0 ? (cols[catchAllIdx] ?? "").trim().toLowerCase() : "";
+      const catchAll =
+        catchAllRaw === "true" ? true : catchAllRaw === "false" ? false : null;
+      return { email, status: mapN2bStatus(rawStatus), rawStatus, catchAll };
     });
 }
 
@@ -162,7 +171,13 @@ function parseJsonRow(row: unknown): N2bRowResult {
   const rawStatus = String(
     r.status ?? r.result ?? r.deliverability ?? r.Status ?? r.verdict ?? "unknown"
   );
-  return { email, status: mapN2bStatus(rawStatus), rawStatus };
+  const rawCatchAll = r.catchall ?? r.catchAll ?? r.catch_all;
+  return {
+    email,
+    status: mapN2bStatus(rawStatus),
+    rawStatus,
+    catchAll: typeof rawCatchAll === "boolean" ? rawCatchAll : null,
+  };
 }
 
 // Maps NeverBounce's vocabulary onto ours. Their categories separate

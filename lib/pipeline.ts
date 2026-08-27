@@ -5,6 +5,7 @@ import { mtnQueue, n2bPollQueue } from "./queue";
 import { n2bClient, type N2bRowResult } from "./n2b";
 import { classifyMtnResult } from "./mtn";
 import { sendAlert } from "./alerts";
+import { domainOf, loadDomainFacts, recordDomainFact, verdictFromDomain } from "./domains";
 import type { FinalStatus, ResultSource } from "@prisma/client";
 
 // ---------- Terminal state transitions ----------
@@ -108,6 +109,7 @@ export async function ingestList(params: {
   // Resolve what's already known so the pre-flight summary can show it, but
   // stop there: nothing runs until the upload has been reviewed and started.
   await runCachePass(list.id);
+  await resolveFromDomainFacts(list.id, ["pending"]);
 
   return list;
 }
@@ -187,6 +189,43 @@ async function runCachePass(listId: string) {
           },
     });
   }
+}
+
+// Settles rows whose domain already answers for them -- a domain with no MX
+// cannot deliver to any address, and a confirmed catch-all can only ever
+// answer "accept-all". Runs before both providers, so these cost nothing at
+// all rather than one credit each.
+async function resolveFromDomainFacts(
+  listId: string,
+  stages: ("pending" | "needs_n2b")[]
+): Promise<number> {
+  const rows = await prisma.listRow.findMany({
+    where: { listId, stage: { in: stages } },
+    select: { id: true, normalizedEmail: true },
+  });
+  if (rows.length === 0) return 0;
+
+  const facts = await loadDomainFacts(rows.map((r) => domainOf(r.normalizedEmail)));
+  if (facts.size === 0) return 0;
+
+  let resolved = 0;
+  for (const row of rows) {
+    const verdict = verdictFromDomain(facts.get(domainOf(row.normalizedEmail)));
+    if (!verdict) continue;
+
+    await prisma.listRow.update({
+      where: { id: row.id },
+      data: {
+        stage: "mtn_done",
+        finalStatus: verdict.status,
+        finalSource: "cache",
+        mtnStatus: "domain",
+        mtnMessage: verdict.reason,
+      },
+    });
+    resolved++;
+  }
+  return resolved;
 }
 
 async function enqueuePendingRows(listId: string) {
@@ -276,7 +315,7 @@ export async function retryList(listId: string) {
 
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
-    select: { id: true, normalizedEmail: true },
+    select: { id: true, normalizedEmail: true, mtnMessage: true },
   });
 
   if (needsN2b.length === 0) {
@@ -321,6 +360,21 @@ export async function recordMtnResult(params: {
     await upsertEmailCache(params.normalizedEmail, { mtnResult: mtnVerdict });
   }
 
+  // Record what the reply says about the domain itself. "No MX" is
+  // conclusive for every address there; catch-all is stored as a hint from
+  // MTN, to be confirmed by the paid pass before it is used to skip checks.
+  const domain = domainOf(params.normalizedEmail);
+  const message = params.mtnMessage.trim().toLowerCase();
+  if (message === "no mx") {
+    await recordDomainFact(domain, { hasNoMx: true });
+  } else if (message === "catch-all") {
+    await recordDomainFact(domain, { isCatchAll: true, source: "mtn" });
+  } else if (params.outcome === "valid" || params.outcome === "invalid") {
+    // A specific accept/reject proves the server distinguishes mailboxes,
+    // so it is not a catch-all and does have an MX.
+    await recordDomainFact(domain, { hasNoMx: false });
+  }
+
   await maybeFinalizeMtnPass(params.listId);
 }
 
@@ -357,11 +411,24 @@ export async function failListFromMtn(listId: string, mtnMessage: string) {
   );
 }
 
-// True when the list is gone or stopped -- either way its queued jobs should
-// be dropped rather than processed.
+// True when the list is gone, stopped or failed -- either way its queued
+// jobs should be dropped rather than processed.
 export async function isListInactive(listId: string) {
   const list = await prisma.list.findUnique({ where: { id: listId }, select: { status: true } });
-  return list === null || list.status === "failed";
+  return list === null || list.status === "failed" || list.status === "stopped";
+}
+
+// Halts a running list. Queued work drains without being processed (see
+// isListInactive), so nothing further is checked or charged. Everything
+// already verified is kept, and resuming picks up from there.
+export async function stopList(listId: string) {
+  await prisma.list.updateMany({
+    where: { id: listId, status: { in: ["running_mtn", "running_n2b", "needs_approval"] } },
+    data: {
+      status: "stopped",
+      lastError: "Stopped manually. Results so far are kept — resume to continue.",
+    },
+  });
 }
 
 // Removes the prospect data (the personal data, and the point of deleting)
@@ -456,7 +523,7 @@ async function maybeFinalizeMtnPass(listId: string) {
 async function finalizeMtnPass(listId: string) {
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
-    select: { id: true, normalizedEmail: true },
+    select: { id: true, normalizedEmail: true, mtnMessage: true },
   });
 
   if (needsN2b.length === 0) {
@@ -491,7 +558,7 @@ export async function approveN2bSubmission(listId: string) {
 
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
-    select: { id: true, normalizedEmail: true },
+    select: { id: true, normalizedEmail: true, mtnMessage: true },
   });
 
   if (needsN2b.length === 0) {
@@ -538,8 +605,58 @@ export async function finishWithoutN2b(listId: string) {
   await markCompleted(listId);
 }
 
-async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmail: string }[]) {
-  const emails = rows.map((r) => r.normalizedEmail);
+// Chooses which of the parked rows actually need paying for.
+//
+// Where the cheap pass called every address at a domain catch-all, they will
+// all come back accept-all -- so one address establishes the answer for the
+// whole domain and the rest are held back. If the probe disproves catch-all,
+// the held rows are simply submitted in the following batch, so nothing is
+// lost either way. This converges in at most two rounds per domain.
+async function selectRowsToCharge<
+  T extends { id: string; normalizedEmail: string; mtnMessage: string | null },
+>(rows: T[], forceChargeAll: boolean): Promise<T[]> {
+  if (forceChargeAll) return rows;
+
+  const facts = await loadDomainFacts(rows.map((r) => domainOf(r.normalizedEmail)));
+  const charge: T[] = [];
+  const probed = new Set<string>();
+
+  for (const row of rows) {
+    const domain = domainOf(row.normalizedEmail);
+    const suspectedCatchAll = (row.mtnMessage ?? "").trim().toLowerCase() === "catch-all";
+    const known = facts.get(domain);
+
+    // A specific mailbox answer cannot be generalised from a neighbour, and
+    // a domain already shown not to be catch-all has nothing left to probe
+    // for -- both are charged individually.
+    if (!suspectedCatchAll || known?.isCatchAll === false) {
+      charge.push(row);
+      continue;
+    }
+
+    if (probed.has(domain)) continue; // held: the probe will answer for it
+    probed.add(domain);
+    charge.push(row);
+  }
+
+  return charge;
+}
+
+async function submitN2bBatch(
+  listId: string,
+  rows: { id: string; normalizedEmail: string; mtnMessage: string | null }[]
+) {
+  // Safety net: probing converges in two rounds per domain, so a third
+  // batch means something unforeseen. Charge everything rather than risk
+  // looping while a list never finishes.
+  const priorBatches = await prisma.n2bBatch.count({ where: { listId } });
+  const charge = await selectRowsToCharge(rows, priorBatches >= 2);
+  const emails = charge.map((r) => r.normalizedEmail);
+
+  if (emails.length === 0) {
+    await markCompleted(listId);
+    return;
+  }
 
   let trackingId: string;
   try {
@@ -619,33 +736,62 @@ async function applyN2bResults(
 ) {
   const byEmail = new Map(rows.map((r) => [r.email.trim().toLowerCase(), r]));
 
+  // Record what the report says about each domain first. Its catch-all flag
+  // is the authoritative one, and it is what lets rows held back from this
+  // batch resolve below without ever being charged.
+  for (const r of rows) {
+    if (r.catchAll === null) continue;
+    await recordDomainFact(domainOf(r.email.trim().toLowerCase()), {
+      isCatchAll: r.catchAll,
+      source: "n2b",
+    });
+  }
+
   const listRows = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
-    select: { id: true, normalizedEmail: true },
+    select: { id: true, normalizedEmail: true, mtnMessage: true },
   });
 
   for (const row of listRows) {
     const result = byEmail.get(row.normalizedEmail);
-    const finalStatus: FinalStatus = result?.status ?? "unknown";
+    // Rows held back for a domain probe were never submitted, so there is
+    // no verdict for them here. Leaving them alone lets the domain answer
+    // for them a few lines down; marking them "unknown" would throw away
+    // the whole point of holding them.
+    if (!result) continue;
 
     await prisma.listRow.update({
       where: { id: row.id },
       data: {
         stage: "n2b_done",
-        n2bStatus: result?.rawStatus ?? "no_result",
+        n2bStatus: result.rawStatus,
         n2bCheckedAt: new Date(),
-        finalStatus,
+        finalStatus: result.status,
         finalSource: "n2b",
       },
     });
 
-    await upsertEmailCache(row.normalizedEmail, { n2bResult: finalStatus });
+    await upsertEmailCache(row.normalizedEmail, { n2bResult: result.status });
   }
 
   await prisma.n2bBatch.update({
     where: { id: batchId },
     data: { status: "completed", completedAt: new Date(), resultUrl: resultUrl ?? null },
   });
+
+  // Held rows whose domain the probe has now settled resolve for free.
+  await resolveFromDomainFacts(listId, ["needs_n2b"]);
+
+  // Anything still parked means a probe disproved catch-all for its domain,
+  // so those addresses do need checking individually after all.
+  const stillParked = await prisma.listRow.findMany({
+    where: { listId, stage: "needs_n2b" },
+    select: { id: true, normalizedEmail: true, mtnMessage: true },
+  });
+  if (stillParked.length > 0) {
+    await submitN2bBatch(listId, stillParked);
+    return;
+  }
 
   await markCompleted(listId);
 }
