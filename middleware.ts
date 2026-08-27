@@ -6,7 +6,9 @@ import { SESSION_COOKIE } from "@/lib/session-cookie";
 // anonymous visitors; the cookie's validity is verified server-side by
 // requireUser() on every page and API route, which is what actually guards
 // the data.
-const PUBLIC_PATHS = ["/login", "/setup"];
+// /api/health is public so an uptime monitor can reach it without a
+// session. It returns dependency status only -- no data.
+const PUBLIC_PATHS = ["/login", "/setup", "/api/health"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

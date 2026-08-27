@@ -33,7 +33,8 @@ test("honours Retry-After when the provider sends one", async () => {
 });
 
 test("falls back to a full window when Retry-After is absent or junk", async () => {
-  for (const headers of [{}, { "retry-after": "soon" }]) {
+  const cases: Record<string, string>[] = [{}, { "retry-after": "soon" }];
+  for (const headers of cases) {
     stub(429, headers);
     await assert.rejects(
       () => mtnClient.verify("a@example.com"),

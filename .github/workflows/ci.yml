@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    # Postgres is only needed by the migration check below, which requires a
+    # real shadow database to replay migrations into.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      # The unit suite never calls out; these only satisfy config validation.
+      MTN_API_KEY: ci-placeholder
+      N2B_API_TOKEN: ci-placeholder
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # The Prisma client is generated code that the typecheck and build both
+      # depend on, so it has to exist before either runs.
+      - run: npx prisma generate
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      # Migrations are applied automatically on deploy, so a schema change
+      # without a matching migration would otherwise only surface in
+      # production -- as a runtime error against columns that do not exist.
+      - name: Schema and migrations agree
+        run: |
+          if npx prisma migrate diff \
+              --from-migrations prisma/migrations \
+              --to-schema-datamodel prisma/schema.prisma \
+              --shadow-database-url "$DATABASE_URL" \
+              --exit-code; then
+            echo "schema matches migrations"
+          else
+            echo "::error::schema.prisma has changes with no migration. Generate one before merging."
+            exit 1
+          fi

@@ -13,6 +13,9 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "test": "tsx --test lib/*.test.ts",
+    "test:live": "tsx --test tests/live/*.test.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "backup": "bash scripts/backup.sh",
     "lint": "next lint"
   },
   "dependencies": {
