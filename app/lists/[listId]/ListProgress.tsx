@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { approveList, retryFailedList } from "@/app/actions";
+import { approveList, retryFailedList, finishListWithoutN2b } from "@/app/actions";
 
 interface StatusPayload {
   status: string;
@@ -13,6 +13,8 @@ interface StatusPayload {
   bySource: Record<string, number>;
   n2bCreditsSpent: number;
   n2bBatches: { id: string; status: string; emailCount: number }[];
+  pendingN2b: number;
+  pendingN2bReasons: { reason: string; count: number }[];
 }
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "needs_approval"]);
@@ -28,6 +30,7 @@ export default function ListProgress({ listId }: { listId: string }) {
   const [data, setData] = useState<StatusPayload | null>(null);
   const [approving, setApproving] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [finishing, setFinishing] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -106,21 +109,79 @@ export default function ListProgress({ listId }: { listId: string }) {
       </div>
 
       {data.status === "needs_approval" && (
-        <div className="warning" style={{ marginTop: 20 }}>
-          This list's Pass 2 (NeverBounce) batch would exceed the configured single-list credit
-          cap (<span className="num">{data.stageCounts.needs_n2b ?? 0}</span> rows pending).
-          Approve to proceed.
-          <div style={{ marginTop: 10 }}>
+        <div className="review-panel">
+          <div className="review-head">
+            <span className="eyebrow">Step 2 of 2 — your decision</span>
+            <h3>Mail Tester Ninja finished. Continue to NeverBounce?</h3>
+          </div>
+
+          <div className="review-split">
+            <div>
+              <div className="review-label">Already resolved — no further cost</div>
+              <div className="review-figure num">{data.resolved}</div>
+              <div className="meta">
+                of {data.totalRows} rows, via cache and Mail Tester Ninja
+              </div>
+            </div>
+            <div>
+              <div className="review-label">Would cost NeverBounce credits</div>
+              <div className="review-figure num accent">{data.pendingN2b}</div>
+              <div className="meta">
+                {data.pendingN2b === 1 ? "credit" : "credits"} to resolve the rest
+              </div>
+            </div>
+          </div>
+
+          {data.pendingN2bReasons.length > 0 && (
+            <table className="reason-table">
+              <thead>
+                <tr>
+                  <th>Why it's unresolved</th>
+                  <th style={{ textAlign: "right" }}>Rows</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.pendingN2bReasons.map((r) => (
+                  <tr key={r.reason}>
+                    <td>{r.reason}</td>
+                    <td className="num" style={{ textAlign: "right" }}>
+                      {r.count}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <div className="review-actions">
             <button
-              disabled={approving}
+              disabled={approving || finishing}
               onClick={async () => {
                 setApproving(true);
                 await approveList(listId);
                 setApproving(false);
               }}
             >
-              {approving ? "Submitting…" : "Approve N2B submission"}
+              {approving
+                ? "Submitting…"
+                : `Verify ${data.pendingN2b} with NeverBounce`}
             </button>
+            <button
+              className="btn-quiet"
+              disabled={approving || finishing}
+              onClick={async () => {
+                setFinishing(true);
+                await finishListWithoutN2b(listId);
+                setFinishing(false);
+              }}
+            >
+              {finishing ? "Finishing…" : "Finish without NeverBounce"}
+            </button>
+          </div>
+          <div className="meta" style={{ marginTop: 8 }}>
+            Finishing keeps every result found so far and spends nothing. Unresolved rows are
+            marked <code>risky</code> (catch-all domains) or <code>unknown</code>, and the list
+            becomes exportable.
           </div>
         </div>
       )}
@@ -133,9 +194,9 @@ export default function ListProgress({ listId }: { listId: string }) {
             Results already verified are kept — retrying resumes from where it stopped and
             re-checks nothing you've already paid for.
           </div>
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
-              disabled={retrying}
+              disabled={retrying || finishing}
               onClick={async () => {
                 setRetrying(true);
                 await retryFailedList(listId);
@@ -143,6 +204,17 @@ export default function ListProgress({ listId }: { listId: string }) {
               }}
             >
               {retrying ? "Retrying…" : "Retry"}
+            </button>
+            <button
+              className="btn-quiet"
+              disabled={retrying || finishing}
+              onClick={async () => {
+                setFinishing(true);
+                await finishListWithoutN2b(listId);
+                setFinishing(false);
+              }}
+            >
+              {finishing ? "Finishing…" : "Finish without NeverBounce"}
             </button>
           </div>
         </div>

@@ -294,7 +294,10 @@ async function finalizeMtnPass(listId: string) {
     return;
   }
 
-  if (needsN2b.length > config.n2b.singleListCreditCap) {
+  // Pause before spending. Credits are the expensive, irreversible part of
+  // this pipeline, so the default is that a person sees what the cheap pass
+  // found -- and what the paid pass would cost -- and decides.
+  if (config.n2b.requireApproval || needsN2b.length > config.n2b.singleListCreditCap) {
     await prisma.list.update({ where: { id: listId }, data: { status: "needs_approval" } });
     return;
   }
@@ -302,15 +305,57 @@ async function finalizeMtnPass(listId: string) {
   await submitN2bBatch(listId, needsN2b);
 }
 
-// Called from the UI when a list is paused at needs_approval because the
-// Pass 2 batch would exceed the configured single-list credit cap.
+// Called from the UI when a paused list is approved for the paid pass.
 export async function approveN2bSubmission(listId: string) {
+  // Re-apply current classification first: never pay to re-ask something
+  // MTN already answered definitively.
+  await reclassifyParkedRows(listId);
+
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
     select: { id: true, normalizedEmail: true },
   });
+
+  if (needsN2b.length === 0) {
+    await prisma.list.update({
+      where: { id: listId },
+      data: { status: "completed", completedAt: new Date() },
+    });
+    return;
+  }
+
   await prisma.list.update({ where: { id: listId }, data: { status: "running_n2b" } });
   await submitN2bBatch(listId, needsN2b);
+}
+
+// Close out a list using only what the cheap pass established, spending
+// nothing further. This is the escape hatch: a provider being unreachable,
+// or simply not being worth the spend, must never leave a list stranded.
+export async function finishWithoutN2b(listId: string) {
+  const parked = await prisma.listRow.findMany({
+    where: { listId, stage: { in: ["needs_n2b", "pending"] } },
+    select: { id: true, mtnMessage: true },
+  });
+
+  for (const row of parked) {
+    // A catch-all domain accepted the address but guarantees nothing --
+    // that is genuinely "risky", not merely unknown. Anything else went
+    // unanswered, so say so rather than implying a verdict.
+    const isCatchAll = (row.mtnMessage ?? "").trim().toLowerCase() === "catch-all";
+    await prisma.listRow.update({
+      where: { id: row.id },
+      data: {
+        stage: "mtn_done",
+        finalStatus: isCatchAll ? "risky" : "unknown",
+        finalSource: "mtn",
+      },
+    });
+  }
+
+  await prisma.list.update({
+    where: { id: listId },
+    data: { status: "completed", completedAt: new Date(), lastError: null },
+  });
 }
 
 async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmail: string }[]) {

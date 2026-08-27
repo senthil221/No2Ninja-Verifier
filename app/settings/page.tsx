@@ -46,6 +46,10 @@ export default function SettingsPage() {
           <code>{config.n2b.pollIntervalMs}ms</code>
         </div>
         <div className="kv-row">
+          <span className="k">Pause for approval before spending</span>
+          <code>{config.n2b.requireApproval ? "yes — every list" : "only over the cap"}</code>
+        </div>
+        <div className="kv-row">
           <span className="k">Single-list credit cap</span>
           <code>{config.n2b.singleListCreditCap}</code>
         </div>

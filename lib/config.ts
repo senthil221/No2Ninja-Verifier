@@ -34,6 +34,10 @@ export const config = {
     baseUrl: process.env.N2B_BASE_URL ?? "https://connect.no2bounce.com/v2/n2b_validate_bulk",
     pollIntervalMs: int("N2B_POLL_INTERVAL_MS", 15_000),
     singleListCreditCap: int("N2B_SINGLE_LIST_CREDIT_CAP", 5000),
+    // Every list pauses after the cheap pass so a human sees what it found
+    // and what the paid pass would cost before any credits are spent. Set
+    // N2B_REQUIRE_APPROVAL=false to auto-continue under the credit cap.
+    requireApproval: process.env.N2B_REQUIRE_APPROVAL !== "false",
   },
 
   catchAllHandling: (process.env.CATCH_ALL_HANDLING === "accept" ? "accept" : "n2b") as

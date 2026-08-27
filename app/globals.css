@@ -517,6 +517,94 @@ a > button {
   font-size: 13.5px;
 }
 
+/* ---------- Review / decision panel ---------- */
+
+.review-panel {
+  margin-top: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  background: var(--surface-sunken);
+}
+
+.review-head h3 {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 4px 0 0;
+}
+
+.review-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+
+.review-split > div {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+
+.review-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.review-figure {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin-top: 4px;
+}
+
+.review-figure.accent {
+  color: var(--accent);
+}
+
+.reason-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.reason-table th {
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.reason-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.reason-table tr:last-child td {
+  border-bottom: none;
+}
+
+.review-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 /* ---------- Destructive actions ---------- */
 
 .btn-danger {
