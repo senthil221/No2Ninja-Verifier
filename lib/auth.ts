@@ -2,6 +2,7 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { cookies } from "next/headers";
 import { prisma } from "./prisma";
+import { SESSION_COOKIE } from "./session-cookie";
 
 const scrypt = promisify(scryptCb) as (
   password: string,
@@ -9,7 +10,7 @@ const scrypt = promisify(scryptCb) as (
   keylen: number
 ) => Promise<Buffer>;
 
-export const SESSION_COOKIE = "wv_session";
+export { SESSION_COOKIE };
 const SESSION_DAYS = 14;
 const KEY_LENGTH = 64;
 

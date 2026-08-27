@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE } from "@/lib/auth";
+import { SESSION_COOKIE } from "@/lib/session-cookie";
 
 // Middleware runs on the edge runtime, where Prisma is unavailable, so this
 // only checks that a session cookie is present. That is enough to redirect
