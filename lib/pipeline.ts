@@ -1,4 +1,3 @@
-import { randomBytes } from "crypto";
 import { prisma } from "./prisma";
 import { config } from "./config";
 import { parseEmailCsv } from "./csv";
@@ -459,11 +458,10 @@ export async function finishWithoutN2b(listId: string) {
 
 async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmail: string }[]) {
   const emails = rows.map((r) => r.normalizedEmail);
-  const hashkey = randomBytes(16).toString("hex");
 
   let trackingId: string;
   try {
-    ({ trackingId } = await n2bClient.submitBulk(emails, hashkey));
+    ({ trackingId } = await n2bClient.submitBulk(emails));
   } catch (err) {
     // A rejected/failed API call must never take the whole worker process
     // down with it -- fail just this list and keep processing everything
@@ -479,7 +477,6 @@ async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmai
     data: {
       listId,
       trackingId,
-      hashkey,
       emailCount: emails.length,
       status: "submitted",
     },
@@ -501,7 +498,16 @@ async function submitN2bBatch(listId: string, rows: { id: string; normalizedEmai
 
 export async function pollN2bBatchOnce(batchId: string) {
   const batch = await prisma.n2bBatch.findUniqueOrThrow({ where: { id: batchId } });
-  const result = await n2bClient.poll(batch.trackingId);
+
+  // poll() downloads the result file once the batch finishes, so it can fail
+  // on the network too. Treat that like any other provider failure rather
+  // than letting it escape into the queue.
+  let result: Awaited<ReturnType<typeof n2bClient.poll>>;
+  try {
+    result = await n2bClient.poll(batch.trackingId);
+  } catch (err) {
+    result = { state: "failed", error: err instanceof Error ? err.message : String(err) };
+  }
 
   await prisma.n2bBatch.update({ where: { id: batchId }, data: { lastPolledAt: new Date() } });
 
@@ -526,20 +532,7 @@ export async function pollN2bBatchOnce(batchId: string) {
     return;
   }
 
-  let rows: N2bRowResult[];
-  try {
-    rows =
-      result.state === "complete_inline"
-        ? result.rows
-        : await n2bClient.fetchSignedUrlResults(result.signedUrl);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await prisma.n2bBatch.update({ where: { id: batchId }, data: { status: "failed", error: message } });
-    await prisma.list.update({ where: { id: batch.listId }, data: { status: "failed", lastError: message } });
-    return;
-  }
-
-  await applyN2bResults(batch.listId, batchId, rows, result.state === "complete_signed_url" ? result.signedUrl : undefined);
+  await applyN2bResults(batch.listId, batchId, result.rows, undefined);
 }
 
 async function applyN2bResults(
