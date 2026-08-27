@@ -710,6 +710,13 @@ a > button {
   font-weight: 700;
 }
 
+.throughput {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-family: var(--font-num);
+}
+
 .live-dot {
   display: inline-block;
   width: 7px;

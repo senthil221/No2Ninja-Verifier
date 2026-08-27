@@ -17,6 +17,7 @@ interface StatusPayload {
   byFinalStatus: Record<string, number>;
   bySource: Record<string, number>;
   n2bCreditsSpent: number;
+  throughput: { perSecond: number; etaSeconds: number | null };
   pendingN2b: number;
   pendingN2bReasons: { reason: string; count: number }[];
   preflight: {
@@ -55,6 +56,14 @@ const STATUS_MEANING: Record<string, string> = {
   risky: "Catch-all domain — accepts anything, so delivery is unconfirmed.",
   unknown: "Could not be determined by either provider.",
 };
+
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.floor(mins / 60);
+  return `${hours}h ${mins % 60}m`;
+}
 
 const STEPS = [
   { key: "preflight", label: "Pre-flight" },
@@ -255,6 +264,14 @@ export default function ListProgress({ listId }: { listId: string }) {
             <span className="meta">
               resolved ({pct}%){running && <span className="live-dot" aria-label="running" />}
             </span>
+            {running && data.throughput.perSecond > 0 && (
+              <span className="throughput">
+                <span className="num">{data.throughput.perSecond}</span>/sec
+                {data.throughput.etaSeconds !== null && (
+                  <> · ~{formatEta(data.throughput.etaSeconds)} left</>
+                )}
+              </span>
+            )}
           </div>
 
           <div className="progress-track">

@@ -47,6 +47,13 @@ export const config = {
     rateLimitMax: int("MTN_RATE_LIMIT_MAX", 57),
     rateLimitWindowMs: int("MTN_RATE_LIMIT_WINDOW_MS", 10_000),
     maxRetries: int("MTN_MAX_RETRIES", 3),
+    // How many checks are in flight at once. This does not raise the request
+    // rate -- the limiter above is the ceiling and still applies -- it only
+    // stops a slow SMTP probe from stalling the queue behind it. Calls are
+    // latency-bound (often ~1s, occasionally 7s), so at concurrency 1 the
+    // pipeline ran at roughly a tenth of the plan's allowance.
+    // Needs to be at least ceiling x mean-latency to keep the limit saturated.
+    concurrency: int("MTN_CONCURRENCY", 12),
   },
 
   n2b: {

@@ -66,10 +66,11 @@ const mtnWorker = new Worker<MtnVerifyJobData>(
   },
   {
     connection: redisConnection,
-    // One at a time, on purpose. MTN temporarily bans keys that issue
-    // simultaneous requests, so the limiter caps the rate while this caps
-    // concurrency -- raising it would trade a working key for a faster one.
-    concurrency: 1,
+    // The limiter is what protects the key: it caps requests per window no
+    // matter how many run at once. Concurrency only decides how much of that
+    // allowance actually gets used -- at 1, a single slow SMTP probe stalls
+    // everything behind it and the queue runs far under the plan's limit.
+    concurrency: config.mtn.concurrency,
     limiter: { max: config.mtn.rateLimitMax, duration: config.mtn.rateLimitWindowMs },
   }
 );

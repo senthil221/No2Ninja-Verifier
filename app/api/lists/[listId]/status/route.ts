@@ -17,6 +17,7 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
     creditSpend,
     parkedReasons,
     fullBreakdown,
+    checkedLastMinute,
   ] = await Promise.all([
     prisma.listRow.groupBy({ by: ["stage"], where: { listId: list.id }, _count: true }),
     prisma.listRow.groupBy({
@@ -49,6 +50,12 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
         where: { listId: list.id },
         _count: true,
       }),
+      // Throughput over a recent window, used for the estimate below.
+      // Measured rather than assumed, because the real rate depends on how
+      // slow the mail servers being probed happen to be.
+      prisma.listRow.count({
+        where: { listId: list.id, mtnCheckedAt: { gte: new Date(Date.now() - 60_000) } },
+      }),
     ]);
 
   function toCountMap<T extends { _count: number }>(groups: T[], keyOf: (g: T) => string | null) {
@@ -60,6 +67,15 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
   const bySource = toCountMap(sourceGroups, (g) => g.finalSource);
   const resolved = Object.values(byFinalStatus).reduce((a: number, b) => a + (b as number), 0);
   const pendingN2b = stageCounts.needs_n2b ?? 0;
+
+  const stillToCheck = stageCounts.pending ?? 0;
+  const perSecond = checkedLastMinute / 60;
+  // Only offer an estimate once there is enough movement to base one on --
+  // a number extrapolated from two data points is worse than none.
+  const etaSeconds =
+    list.status === "running_mtn" && stillToCheck > 0 && checkedLastMinute >= 5
+      ? Math.round(stillToCheck / perSecond)
+      : null;
 
   return NextResponse.json({
     status: list.status,
@@ -78,6 +94,7 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
     byFinalStatus,
     bySource,
     n2bCreditsSpent: creditSpend._sum.amount ?? 0,
+    throughput: { perSecond: Number(perSecond.toFixed(2)), etaSeconds },
     // The review step's decision data: what the paid pass would cost, and
     // the reason behind each row it would cover.
     pendingN2b,
