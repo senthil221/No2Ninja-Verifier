@@ -26,12 +26,12 @@ export default function DeleteListButton({
   return (
     <div className="confirm-box">
       <strong>Delete “{listName}”?</strong>
-      <div className="meta" style={{ marginTop: 4 }}>
+      <div className="meta">
         Permanently removes {totalRows} prospect {totalRows === 1 ? "row" : "rows"} and their
-        verification results. Export first if you still need the data — this can't be undone.
+        verification results. Export first if you still need the data. This cannot be undone.
         Credits already spent stay on your spend history.
       </div>
-      <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+      <div className="review-actions" style={{ marginTop: 12 }}>
         <button
           className="btn-danger"
           disabled={deleting}

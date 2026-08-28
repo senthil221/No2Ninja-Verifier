@@ -54,7 +54,7 @@ const STATUS_ORDER = ["valid", "invalid", "risky", "unknown"];
 const STATUS_MEANING: Record<string, string> = {
   valid: "Mailbox confirmed. Safe to send.",
   invalid: "Confirmed undeliverable. Remove before sending.",
-  risky: "Catch-all domain — accepts anything, so delivery is unconfirmed.",
+  risky: "Catch-all domain. Accepts anything, so delivery is unconfirmed.",
   unknown: "Could not be determined by either provider.",
 };
 
@@ -216,11 +216,11 @@ export default function ListProgress({ listId }: { listId: string }) {
                 <td className="num right">{p.sourceRowCount}</td>
               </tr>
               <tr className="muted-row">
-                <td>Skipped — not a valid address</td>
+                <td>Skipped, not a valid address</td>
                 <td className="num right">{p.skippedInvalid}</td>
               </tr>
               <tr className="muted-row">
-                <td>Skipped — duplicate</td>
+                <td>Skipped, duplicate</td>
                 <td className="num right">{p.skippedDupes}</td>
               </tr>
               <tr>
@@ -334,7 +334,7 @@ export default function ListProgress({ listId }: { listId: string }) {
 
           <div className="review-split">
             <div>
-              <div className="review-label">Resolved — no further cost</div>
+              <div className="review-label">Resolved, no further cost</div>
               <div className="review-figure num">{data.resolved}</div>
               <div className="meta">of {data.totalRows} rows</div>
             </div>
@@ -391,7 +391,7 @@ export default function ListProgress({ listId }: { listId: string }) {
         <div className="panel-action">
           <h3 className="panel-title">Verification stopped</h3>
           <p className="meta">
-            Nothing further is being checked or charged. Everything verified so far is kept —
+            Nothing further is being checked or charged. Everything verified so far is kept.
             resuming continues from where it left off and re-checks nothing.
           </p>
           <div className="review-actions">
@@ -418,7 +418,7 @@ export default function ListProgress({ listId }: { listId: string }) {
           <strong>This list stopped before finishing.</strong>
           {data.lastError && <div className="meta">{data.lastError}</div>}
           <div className="meta">
-            Everything already verified is kept — retrying resumes where it stopped and re-checks
+            Everything already verified is kept. Retrying resumes where it stopped and re-checks
             nothing you&apos;ve paid for.
           </div>
           <div className="review-actions">

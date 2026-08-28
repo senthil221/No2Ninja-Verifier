@@ -48,7 +48,7 @@ export default async function SetupPage({
         </div>
         <h1 className="auth-title">Create your account</h1>
         <p className="auth-sub">
-          First run — this sets the only account. Choose a password here; it is hashed before it
+          First run. This sets the only account. Choose a password here; it is hashed before it
           is stored and is never recoverable, so save it in your password manager.
         </p>
 

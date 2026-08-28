@@ -103,13 +103,13 @@ export default async function HomePage() {
       <div className="card">
         <h2>All clients</h2>
         {clients.length === 0 ? (
-          <p className="empty-state">No clients yet — add one above to get started.</p>
+          <p className="empty-state">No clients yet. Add one above to get started.</p>
         ) : (
           <table className="data-table">
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Lists</th>
+                <th className="right">Lists</th>
               </tr>
             </thead>
             <tbody>
@@ -120,7 +120,7 @@ export default async function HomePage() {
                       {client.name}
                     </Link>
                   </td>
-                  <td className="num meta">{client._count.lists}</td>
+                  <td className="num meta right">{client._count.lists}</td>
                 </tr>
               ))}
             </tbody>

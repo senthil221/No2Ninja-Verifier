@@ -48,7 +48,7 @@ export default function SettingsPage() {
         </div>
         <div className="kv-row">
           <span className="k">Pause for approval before spending</span>
-          <code>{config.n2b.requireApproval ? "yes — every list" : "only over the cap"}</code>
+          <code>{config.n2b.requireApproval ? "yes, every list" : "only over the cap"}</code>
         </div>
         <div className="kv-row">
           <span className="k">Single-list credit cap</span>
@@ -60,7 +60,7 @@ export default function SettingsPage() {
         <h2>Alerting</h2>
         <div className="kv-row">
           <span className="k">Webhook</span>
-          <code>{config.alertWebhookUrl ? "configured" : "not set — alerts disabled"}</code>
+          <code>{config.alertWebhookUrl ? "configured" : "not set, alerts disabled"}</code>
         </div>
         <div className="kv-row">
           <span className="k">Events sent</span>
@@ -87,7 +87,7 @@ export default function SettingsPage() {
           <code>
             {config.mtnCacheTtlDays > 0
               ? `${config.mtnCacheTtlDays} days`
-              : "never — always re-verify"}
+              : "never, always re-verify"}
           </code>
         </div>
         <div className="kv-row">
@@ -95,7 +95,7 @@ export default function SettingsPage() {
           <code>
             {config.n2bCacheTtlDays > 0
               ? `${config.n2bCacheTtlDays} days`
-              : "never — re-charges every time"}
+              : "never, re-charges every time"}
           </code>
         </div>
         <div className="kv-row">

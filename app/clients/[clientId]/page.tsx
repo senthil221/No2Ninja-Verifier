@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Ready to start",
-  running_mtn: "Running — MTN pass",
-  running_n2b: "Running — N2B pass",
+  running_mtn: "Running Ninja pass",
+  running_n2b: "Running NeverBounce",
   needs_approval: "Needs approval",
   completed: "Completed",
   failed: "Failed",
@@ -41,7 +41,7 @@ export default async function ClientPage({ params }: { params: { clientId: strin
             <label htmlFor="file">CSV files</label>
             <input type="file" id="file" name="file" accept=".csv" multiple required />
             <p className="meta">
-              Select several at once — each becomes its own list and they queue together, sharing
+              Select several at once. Each becomes its own list, and they queue together sharing
               the same rate limit.
             </p>
           </div>
@@ -51,7 +51,7 @@ export default async function ClientPage({ params }: { params: { clientId: strin
               type="text"
               id="name"
               name="name"
-              placeholder="Optional — ignored when uploading multiple files"
+              placeholder="Optional, ignored for multiple files"
             />
           </div>
           <button type="submit">Upload</button>
@@ -68,9 +68,9 @@ export default async function ClientPage({ params }: { params: { clientId: strin
               <tr>
                 <th>Name</th>
                 <th>Status</th>
-                <th>Rows</th>
+                <th className="right">Rows</th>
                 <th>Uploaded</th>
-                <th style={{ textAlign: "right" }}>Actions</th>
+                <th className="right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -87,7 +87,7 @@ export default async function ClientPage({ params }: { params: { clientId: strin
                       {STATUS_LABEL[list.status] ?? list.status}
                     </span>
                   </td>
-                  <td className="num meta">{list.totalRows}</td>
+                  <td className="num meta right">{list.totalRows}</td>
                   <td className="meta">{list.createdAt.toLocaleDateString()}</td>
                   <td>
                     <div className="table-actions">
