@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createUser, startSession, countUsers, getSessionUser, isAllowedDomain } from "@/lib/auth";
-import { config } from "@/lib/config";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +30,10 @@ async function register(formData: FormData) {
 }
 
 const ERRORS: Record<string, string> = {
-  domain: `Use your ${config.allowedEmailDomains.join(" or ")} address.`,
+  // Deliberately doesn't name the allowed domain: this page is reachable by
+  // anyone, and an error that reveals which domain is accepted turns the
+  // form itself into a way to find that out by trial and error.
+  domain: "That email isn't eligible for an account here.",
   match: "The two passwords do not match.",
   short: "Use at least 12 characters.",
   taken: "An account already exists for that address. Sign in instead.",
@@ -56,9 +58,7 @@ export default async function SignupPage({
           <span />
         </div>
         <h1 className="auth-title">Create an account</h1>
-        <p className="auth-sub">
-          Limited to {config.allowedEmailDomains.map((d) => `@${d}`).join(" and ")} addresses.
-        </p>
+        <p className="auth-sub">Use your work email to get started.</p>
 
         {searchParams.error && (
           <div className="auth-error">{ERRORS[searchParams.error] ?? "Something went wrong."}</div>
