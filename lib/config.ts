@@ -85,7 +85,16 @@ export const config = {
     ? "unresolved"
     : "all_except_valid") as "all_except_valid" | "unresolved",
 
-  emailCacheTtlDays: int("EMAIL_CACHE_TTL_DAYS", 90),
+  // Reuse is priced differently per provider, so the two are set separately.
+  //
+  // Mail Tester Ninja is flat-rate, so caching its verdicts saves nothing --
+  // it only trades a free call for the risk of acting on a stale one. People
+  // change roles and mailboxes are closed; a months-old "Accepted" becomes a
+  // bounce, and bounces cost sender reputation. Default 0 (re-verify always).
+  mtnCacheTtlDays: int("MTN_CACHE_TTL_DAYS", 0),
+  // NeverBounce costs a credit per address, so its verdicts are worth
+  // reusing. Its catch-all finding is a domain property and rarely changes.
+  n2bCacheTtlDays: int("N2B_CACHE_TTL_DAYS", 90),
 
   // Reuse of domain-level facts (no-MX, confirmed catch-all). Shorter TTL
   // than the address cache because a domain's mail configuration can change

@@ -134,7 +134,12 @@ const CACHE_HIT_MAP: Record<string, FinalStatus> = {
 // Free pass 0: resolve rows against the global EmailCache before spending
 // anything on either provider.
 async function runCachePass(listId: string) {
-  const cutoff = new Date(Date.now() - config.emailCacheTtlDays * 24 * 60 * 60 * 1000);
+  const days = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+  // A TTL of 0 puts the cutoff at "now", which nothing can satisfy -- that
+  // is how MTN reuse is switched off by default.
+  const n2bCutoff = days(config.n2bCacheTtlDays);
+  const mtnCutoff = days(config.mtnCacheTtlDays);
+
   const rows = await prisma.listRow.findMany({
     where: { listId, stage: "pending" },
     select: { id: true, normalizedEmail: true },
@@ -152,9 +157,12 @@ async function runCachePass(listId: string) {
     if (!entry) continue;
 
     const n2bFresh =
-      entry.lastN2bResult && entry.lastN2bCheckedAt && entry.lastN2bCheckedAt >= cutoff;
+      entry.lastN2bResult && entry.lastN2bCheckedAt && entry.lastN2bCheckedAt >= n2bCutoff;
     const mtnFresh =
-      entry.lastMtnResult && entry.lastMtnCheckedAt && entry.lastMtnCheckedAt >= cutoff;
+      config.mtnCacheTtlDays > 0 &&
+      entry.lastMtnResult &&
+      entry.lastMtnCheckedAt &&
+      entry.lastMtnCheckedAt >= mtnCutoff;
 
     // A previous N2B verdict is authoritative -- it is the answer the paid
     // pass would give, so reuse it and charge nothing.

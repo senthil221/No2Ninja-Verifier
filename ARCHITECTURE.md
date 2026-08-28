@@ -41,9 +41,18 @@ obtainable for free.
 | Layer | Saves |
 |---|---|
 | Within-file dedup | duplicate addresses in one upload |
-| `EmailCache` (global, per address) | anything verified in any previous list |
+| `EmailCache` -- NeverBounce verdicts only | re-paying for an address already bought |
 | `DomainCache` (per domain) | see below |
 | Domain probing within a batch | one paid check answers for a whole domain |
+
+**Reuse is priced per provider.** Mail Tester Ninja is flat-rate, so caching
+its verdicts saves nothing while risking a stale one -- people change roles
+and mailboxes close, and a months-old "Accepted" becomes a bounce that costs
+sender reputation. Its results are re-verified every time by default
+(`MTN_CACHE_TTL_DAYS=0`). NeverBounce costs a credit per address, so its
+verdicts are reused for 90 days. The same split applies to domain facts:
+no-MX (from the free provider) follows the MTN setting, confirmed catch-all
+(paid) does not.
 
 **Domain-level facts.** Some answers belong to the mail server, not the
 mailbox: a domain with no MX cannot deliver to *any* address, and a

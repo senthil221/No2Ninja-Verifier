@@ -83,8 +83,24 @@ export default function SettingsPage() {
           <code>{config.catchAllHandling}</code>
         </div>
         <div className="kv-row">
-          <span className="k">Email cache freshness</span>
-          <code>{config.emailCacheTtlDays} days</code>
+          <span className="k">Reuse Mail Tester Ninja results</span>
+          <code>
+            {config.mtnCacheTtlDays > 0
+              ? `${config.mtnCacheTtlDays} days`
+              : "never — always re-verify"}
+          </code>
+        </div>
+        <div className="kv-row">
+          <span className="k">Reuse NeverBounce results</span>
+          <code>
+            {config.n2bCacheTtlDays > 0
+              ? `${config.n2bCacheTtlDays} days`
+              : "never — re-charges every time"}
+          </code>
+        </div>
+        <div className="kv-row">
+          <span className="k">Reuse confirmed catch-all domains</span>
+          <code>{config.domainCacheTtlDays} days</code>
         </div>
       </div>
     </>

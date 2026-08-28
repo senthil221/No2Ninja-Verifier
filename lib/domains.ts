@@ -14,9 +14,9 @@ export interface DomainFacts {
   catchAllConfirmed: boolean;
 }
 
-function isFresh(updatedAt: Date): boolean {
-  const cutoff = new Date(Date.now() - config.domainCacheTtlDays * 24 * 60 * 60 * 1000);
-  return updatedAt >= cutoff;
+function freshWithin(updatedAt: Date, days: number): boolean {
+  if (days <= 0) return false;
+  return updatedAt >= new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
 export async function loadDomainFacts(domains: string[]): Promise<Map<string, DomainFacts>> {
@@ -28,14 +28,26 @@ export async function loadDomainFacts(domains: string[]): Promise<Map<string, Do
   });
 
   for (const row of rows) {
-    if (!isFresh(row.updatedAt)) continue;
+    // Catch-all is established by NeverBounce, so reusing it avoids paying
+    // again -- worth doing, on the domain TTL.
+    const catchAllUsable =
+      row.isCatchAll === true &&
+      row.catchAllSource === "n2b" &&
+      freshWithin(row.updatedAt, config.domainCacheTtlDays);
+
+    // No-MX comes from the flat-rate provider, so reusing it saves nothing
+    // and only risks acting on a stale answer: a domain that has since added
+    // a mail server would have every address at it wrongly condemned. It
+    // follows the MTN reuse setting, which is off by default.
+    const noMxUsable =
+      row.hasNoMx === true && freshWithin(row.updatedAt, config.mtnCacheTtlDays);
+
+    if (!catchAllUsable && !noMxUsable) continue;
+
     out.set(row.domain, {
-      isCatchAll: row.isCatchAll,
-      hasNoMx: row.hasNoMx,
-      // Only NeverBounce's own catch-all flag is treated as settled. Acting
-      // on Mail Tester Ninja's hint alone would mean skipping paid checks on
-      // the strength of the cheaper provider's guess.
-      catchAllConfirmed: row.isCatchAll === true && row.catchAllSource === "n2b",
+      isCatchAll: catchAllUsable ? true : null,
+      hasNoMx: noMxUsable ? true : null,
+      catchAllConfirmed: catchAllUsable,
     });
   }
   return out;
