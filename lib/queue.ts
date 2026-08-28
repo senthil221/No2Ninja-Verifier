@@ -22,10 +22,18 @@ export interface N2bPollJobData {
   batchId: string;
 }
 
+export interface ListRetryJobData {
+  listId: string;
+}
+
 export const mtnQueue = new Queue<MtnVerifyJobData>("mtn-verify", {
   connection: redisConnection,
 });
 
 export const n2bPollQueue = new Queue<N2bPollJobData>("n2b-poll", {
+  connection: redisConnection,
+});
+
+export const listRetryQueue = new Queue<ListRetryJobData>("list-retry", {
   connection: redisConnection,
 });

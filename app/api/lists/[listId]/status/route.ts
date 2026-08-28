@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUserForApi } from "@/lib/require-user";
+import { config } from "@/lib/config";
 
 export async function GET(_req: Request, { params }: { params: { listId: string } }) {
   const { response } = await requireUserForApi();
@@ -80,6 +81,17 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
   return NextResponse.json({
     status: list.status,
     lastError: list.lastError,
+    // Self-healing state: whether this failure is being retried on its own,
+    // and when. Absent (autoRetry: null) once retryable is false or the
+    // budget is exhausted -- both mean a person is the only way forward.
+    autoRetry:
+      list.status === "failed" && list.retryable && list.nextAutoRetryAt
+        ? {
+            attempt: list.autoRetryCount,
+            maxAttempts: config.autoRetry.maxAttempts,
+            nextAttemptAt: list.nextAutoRetryAt,
+          }
+        : null,
     totalRows: list.totalRows,
     // Pre-flight accounting: what was in the file vs what will be verified.
     preflight: {

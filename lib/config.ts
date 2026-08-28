@@ -96,6 +96,20 @@ export const config = {
     .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
     .filter(Boolean),
 
+  // Self-healing for failures that look transient (network blips, a
+  // provider 5xx/429) -- see lib/retry-policy.ts for what qualifies. A list
+  // stopped by one of these retries itself on a backoff schedule instead of
+  // waiting for someone to notice and click Retry. Failures that are not
+  // retryable (a bad key, a malformed request) always go straight to a
+  // person: retrying those just delays finding out, since the same input
+  // produces the same failure.
+  autoRetry: {
+    enabled: process.env.LIST_AUTO_RETRY_ENABLED !== "false",
+    maxAttempts: int("LIST_AUTO_RETRY_MAX_ATTEMPTS", 8),
+    baseDelayMs: int("LIST_AUTO_RETRY_BASE_DELAY_MS", 60_000),
+    maxDelayMs: int("LIST_AUTO_RETRY_MAX_DELAY_MS", 30 * 60_000),
+  },
+
   // Where pipeline events are posted. A webhook rather than email/Slack
   // directly, so routing (who gets told, and how) stays a workflow concern
   // rather than something baked into this app.

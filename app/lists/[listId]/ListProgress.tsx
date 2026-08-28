@@ -11,6 +11,10 @@ import {
 interface StatusPayload {
   status: string;
   lastError: string | null;
+  // Present only while a failure is self-healing: null once it isn't
+  // retryable, or once the attempt budget is exhausted -- both mean a
+  // person is the only way forward from here.
+  autoRetry: { attempt: number; maxAttempts: number; nextAttemptAt: string } | null;
   totalRows: number;
   resolved: number;
   stageCounts: Record<string, number>;
@@ -36,11 +40,19 @@ interface StatusPayload {
   }[];
 }
 
-// Statuses where nothing moves without a person acting. Polling pauses here
-// to avoid pointless requests, and every action resumes it -- forgetting
-// that is what previously left the page frozen after "Start verification".
+// Statuses where nothing moves without a person acting -- polling pauses
+// here to avoid pointless requests, and every action resumes it, which is
+// what previously left the page frozen after "Start verification" until
+// that was fixed. "failed" is the one exception: with an active auto-retry
+// it changes on its own, so polling has to keep going through it too.
 const AWAITING_ACTION = new Set(["pending", "failed", "stopped"]);
 const FINISHED = new Set(["completed"]);
+
+function shouldKeepPolling(status: string, autoRetry: StatusPayload["autoRetry"]): boolean {
+  if (FINISHED.has(status)) return false;
+  if (status === "failed" && autoRetry) return true;
+  return !AWAITING_ACTION.has(status);
+}
 
 const STATUS_COLOR_VAR: Record<string, string> = {
   valid: "--valid",
@@ -56,6 +68,20 @@ const STATUS_MEANING: Record<string, string> = {
   risky: "Catch-all domain. Accepts anything, so delivery is unconfirmed.",
   unknown: "Could not be determined by either provider.",
 };
+
+// Renders "in ~3 min" and counts down locally between polls, rather than
+// showing a fixed timestamp that goes stale until the next fetch.
+function AutoRetryCountdown({ at }: { at: string }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const remaining = Math.max(0, Math.round((new Date(at).getTime() - now) / 1000));
+  return <>{remaining <= 0 ? "any moment now" : `in ~${formatEta(remaining)}`}</>;
+}
 
 function formatEta(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -185,8 +211,10 @@ export default function ListProgress({ listId }: { listId: string }) {
         const json: StatusPayload = await res.json();
         if (cancelled) return;
         setData(json);
-        if (!AWAITING_ACTION.has(json.status) && !FINISHED.has(json.status)) {
-          timer = setTimeout(poll, 2000);
+        if (shouldKeepPolling(json.status, json.autoRetry)) {
+          // A pending auto-retry can be minutes away; no need to hammer the
+          // endpoint waiting for it the way active progress does.
+          timer = setTimeout(poll, json.autoRetry ? 10_000 : 2000);
         }
       } catch {
         if (!cancelled) timer = setTimeout(poll, 5000);
@@ -404,18 +432,29 @@ export default function ListProgress({ listId }: { listId: string }) {
       {/* ---------- Failure ---------- */}
       {data.status === "failed" && (
         <div className="error-banner">
-          <strong>This list stopped before finishing.</strong>
+          <strong>
+            {data.autoRetry ? "This list hit a snag, retrying on its own." : "This list stopped before finishing."}
+          </strong>
           {data.lastError && <div className="meta">{data.lastError}</div>}
-          <div className="meta">
-            Everything already verified is kept. Retrying resumes where it stopped and re-checks
-            nothing you&apos;ve paid for.
-          </div>
+          {data.autoRetry ? (
+            <div className="meta">
+              Attempt <span className="num">{data.autoRetry.attempt}</span> of{" "}
+              <span className="num">{data.autoRetry.maxAttempts}</span> failed. Next try{" "}
+              <AutoRetryCountdown at={data.autoRetry.nextAttemptAt} />. Nothing further is being
+              checked or charged in the meantime, and nothing already verified is at risk.
+            </div>
+          ) : (
+            <div className="meta">
+              Everything already verified is kept. Retrying resumes where it stopped and
+              re-checks nothing you&apos;ve paid for.
+            </div>
+          )}
           <div className="review-actions">
             <button
               disabled={busy !== null}
               onClick={() => run("retry", () => retryFailedList(listId))}
             >
-              {busy === "retry" ? "Retrying…" : "Retry"}
+              {busy === "retry" ? "Retrying…" : data.autoRetry ? "Retry now" : "Retry"}
             </button>
             <button
               className="btn-quiet"

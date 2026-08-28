@@ -110,6 +110,15 @@ model List {
   // Set when the pipeline can't recover on its own (e.g. an API rejected
   // the batch) so the UI can show why instead of just a bare "failed" pill.
   lastError      String?
+  // Whether the failure behind lastError looks transient (a network blip,
+  // a provider 5xx/429) rather than something a retry cannot fix (a bad key,
+  // a malformed request). Drives whether the worker retries this on its own.
+  retryable      Boolean    @default(false)
+  // Consecutive auto-retry attempts since the last time this list actually
+  // made progress. Reset on success, capped so a genuinely broken provider
+  // eventually surfaces to a person instead of retrying forever.
+  autoRetryCount Int        @default(0)
+  nextAutoRetryAt DateTime?
   // Who started the run, and so authorised whatever it goes on to spend.
   // Batches are submitted asynchronously by the worker, which has no
   // session, so it is recorded here at start time and read back whenever

@@ -115,12 +115,44 @@ them costs money:
 | Class | Example | Handling |
 |---|---|---|
 | Address is unresolvable | `Catch-All` | escalate — this is the point |
-| Account is broken | `Disabled Key` | **fatal**: stop the list, escalate nothing |
-| Provider unreachable | DNS, TLS, 429 | retry / stop; row returns to pending |
+| Account looks broken | `Disabled Key` | **fatal**: stop the list, escalate nothing, auto-retry |
+| Provider unreachable | DNS, TLS, 429 | stop the list, auto-retry; row returns to pending |
 
 A bad key once caused every row of a list to be escalated — a 20k list would
-have burned 20k credits learning nothing. Account-level and transport
-failures now stop the list instead.
+have burned 20k credits learning nothing. Both classes stop the list instead
+of escalating a single row while the problem is unresolved.
+
+"Fatal" guarantees only that one thing, not that the list gives up: in
+practice, MTN's "Disabled Key" has turned out to be intermittent on their
+side rather than an actually-revoked key — a person retrying the identical
+key by hand routinely fixes it. Since MTN calls are free, retrying that
+automatically costs nothing; see auto-retry below for what bounds it if a
+key is genuinely dead.
+
+### Auto-retry: self-healing for what a person would just retry anyway
+
+A list stopped by a transient-looking failure retries itself on a backoff
+schedule (1 min, doubling, capped at 30 min, `LIST_AUTO_RETRY_MAX_ATTEMPTS`
+attempts by default) instead of sitting there until someone notices and
+clicks Retry. What counts as retryable (`lib/retry-policy.ts`) is narrow on
+purpose:
+
+- a bare network failure with no HTTP status (`fetch failed` — DNS, refused
+  connection, timeout)
+- a provider 5xx or 429
+- MTN's `fatal`-classified account errors (see above)
+
+A request the provider actively rejected with some other 4xx (a malformed
+body, an unrecognised field) is **not** retried automatically: the request
+was wrong, and an identical retry produces an identical rejection. That
+needs a code or config fix, not patience.
+
+No alert fires while a retryable failure is still within its budget — a
+blip that clears on its own should not page anyone. One fires only once the
+budget is exhausted, at which point it genuinely does need a person.
+`markFailed` owns this decision for every failure path in the pipeline, the
+same way it owns the terminal-state alerting described above, so a future
+failure path cannot introduce silent, unbounded retrying by accident.
 
 ### Classification keys on `code`, not `message`
 

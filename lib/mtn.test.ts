@@ -39,6 +39,10 @@ test("an unverifiable code never resolves the address either way", () => {
 });
 
 test("account failures stay fatal regardless of code", () => {
+  // "fatal" here means one specific thing -- never escalate to N2B -- not
+  // "give up". The pipeline auto-retries these (see lib/pipeline.ts
+  // failListFromMtn): "Disabled Key" has turned out in practice to be
+  // intermittent on MTN's side, not an actually-revoked key.
   assert.equal(classifyMtnResult("--", "Disabled Key"), "fatal");
   assert.equal(classifyMtnResult("ok", "Quota Exceeded"), "fatal");
 });

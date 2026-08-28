@@ -18,10 +18,17 @@ export interface MtnResult {
 //   - transient      -> retry on MTN, then hand to No2Bounce if still
 //                       unanswered (Timeout, MX Error, SPAM Block, Limited)
 //   - ambiguous      -> catch-all; behavior controlled by CATCH_ALL_HANDLING
-//   - fatal          -> our account/key is broken, not this address. Stop the
-//                       whole list. Never escalate these to N2B: a bad key
-//                       would otherwise dump every row of a 20k list into the
-//                       expensive provider and silently burn 20k credits.
+//   - fatal          -> looks like an account/key problem, not an answer
+//                       about this address. What this guarantees is narrower
+//                       than the name suggests: never escalate to N2B -- a
+//                       bad key would otherwise dump every row of a 20k list
+//                       into the paid provider and silently burn 20k
+//                       credits. It does not mean stop retrying: "Disabled
+//                       Key" has turned out in practice to be intermittent
+//                       on MTN's side rather than an actually-revoked key,
+//                       so the pipeline auto-retries this like any other
+//                       transient failure -- it just never lets a retry
+//                       loop turn into paid-provider spend while it waits.
 export type MtnOutcome = "valid" | "invalid" | "transient" | "ambiguous" | "fatal";
 
 // Keyed on the normalized message (see normalize below). The docs and the

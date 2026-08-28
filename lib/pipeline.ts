@@ -1,10 +1,11 @@
 import { prisma } from "./prisma";
 import { config } from "./config";
 import { parseEmailCsv } from "./csv";
-import { mtnQueue, n2bPollQueue } from "./queue";
+import { mtnQueue, n2bPollQueue, listRetryQueue } from "./queue";
 import { n2bClient, type N2bRowResult } from "./n2b";
 import { classifyMtnResult } from "./mtn";
 import { sendAlert } from "./alerts";
+import { isRetryableFailure, autoRetryDelayMs } from "./retry-policy";
 import { domainOf, loadDomainFacts, recordDomainFact, verdictFromDomain } from "./domains";
 import type { FinalStatus, ResultSource } from "@prisma/client";
 
@@ -14,25 +15,75 @@ import type { FinalStatus, ResultSource } from "@prisma/client";
 // cannot be forgotten by a future call site. Alerting is best-effort and
 // never blocks the state change itself.
 
-async function markFailed(listId: string, error: string) {
-  const list = await prisma.list.update({
+// Fails a list, and self-heals it if the failure looks transient. A network
+// blip or a provider 5xx/429 gets retried on a backoff schedule without
+// anyone having to notice and click Retry; anything else (a bad key, a
+// malformed request) goes straight to a person, since retrying the same
+// input just produces the same failure again later.
+//
+// Guarded with an atomic updateMany rather than a plain update: several rows
+// can fail for the same reason at once (every in-flight check during an
+// outage), and this must transition and schedule exactly one retry, not one
+// per row.
+async function markFailed(listId: string, error: string, opts: { retryable?: boolean } = {}) {
+  const retryable = opts.retryable ?? false;
+
+  const current = await prisma.list.findUnique({
     where: { id: listId },
-    data: { status: "failed", lastError: error },
-    include: { client: true },
+    select: { autoRetryCount: true },
   });
-  await sendAlert({
-    type: "list_failed",
-    listId,
-    listName: list.name,
-    clientName: list.client.name,
-    error,
+  if (!current) return;
+
+  const attempt = current.autoRetryCount + 1;
+  const willAutoRetry = retryable && config.autoRetry.enabled && attempt <= config.autoRetry.maxAttempts;
+  const delay = willAutoRetry ? autoRetryDelayMs(attempt) : null;
+
+  const transitioned = await prisma.list.updateMany({
+    where: { id: listId, status: { in: ["pending", "running_mtn", "running_n2b"] } },
+    data: {
+      status: "failed",
+      lastError: error,
+      retryable,
+      autoRetryCount: willAutoRetry ? attempt : current.autoRetryCount,
+      nextAutoRetryAt: delay !== null ? new Date(Date.now() + delay) : null,
+    },
   });
+  // A racing failure for the same list already handled this transition.
+  if (transitioned.count === 0) return;
+
+  if (willAutoRetry && delay !== null) {
+    await listRetryQueue.add(
+      "retry",
+      { listId },
+      { delay, removeOnComplete: true, removeOnFail: true }
+    );
+    console.log(
+      `[pipeline] list ${listId} failed (retryable), auto-retry ${attempt}/${config.autoRetry.maxAttempts} in ${Math.round(delay / 1000)}s`
+    );
+    // Self-healing is in progress -- do not page anyone for what may just
+    // be a blip. If it keeps failing, later attempts still alert once the
+    // budget above is exhausted.
+    return;
+  }
+
+  const list = await prisma.list.findUnique({ where: { id: listId }, include: { client: true } });
+  if (!list) return;
+  await sendAlert({ type: "list_failed", listId, listName: list.name, clientName: list.client.name, error });
 }
 
 async function markCompleted(listId: string) {
   const list = await prisma.list.update({
     where: { id: listId },
-    data: { status: "completed", completedAt: new Date(), lastError: null },
+    data: {
+      status: "completed",
+      completedAt: new Date(),
+      lastError: null,
+      // The list made it, so whatever retry budget it had used is no longer
+      // relevant -- a future failure starts counting fresh.
+      retryable: false,
+      autoRetryCount: 0,
+      nextAutoRetryAt: null,
+    },
     include: { client: true },
   });
   const [valid, spend] = await Promise.all([
@@ -295,7 +346,13 @@ async function reclassifyParkedRows(listId: string) {
 // since been fixed). Picks up from whatever stage each row actually reached,
 // so already-verified rows are never re-checked or re-paid for.
 export async function retryList(listId: string) {
-  await prisma.list.update({ where: { id: listId }, data: { lastError: null } });
+  // nextAutoRetryAt is cleared because the retry is happening now, not
+  // pending; autoRetryCount is left alone so the backoff schedule continues
+  // from where it was if this attempt fails again too.
+  await prisma.list.update({
+    where: { id: listId },
+    data: { lastError: null, nextAutoRetryAt: null },
+  });
 
   // Re-apply current rules first: this can hand rows back to the cheap pass
   // (never-reached rows) or resolve them outright, so it has to run before
@@ -401,9 +458,18 @@ function settleMtnOutcome(outcome: "valid" | "invalid" | "ambiguous"): FinalStat
 // nothing about the addresses themselves. Stop the whole list so a
 // misconfiguration can't quietly escalate every row to the paid provider.
 export async function failListFromMtn(listId: string, mtnMessage: string) {
+  // Auto-retried, despite the "fatal" name: in practice "Disabled Key" has
+  // turned out to be an intermittent response from MTN's side rather than
+  // an actually-revoked key -- manually retrying the identical key resolves
+  // it. What "fatal" still guarantees is the important half: this never
+  // escalates a single row to the paid provider while it's happening, no
+  // matter how many rounds it takes to clear. MTN calls cost nothing, so
+  // there is no downside to retrying here; if a key genuinely is dead, the
+  // attempt budget below still bounds it and alerts once exhausted.
   await markFailed(
     listId,
-    `Mail Tester Ninja rejected the request: "${mtnMessage}". No rows were escalated to No2Bounce. Check MTN_API_KEY.`
+    `Mail Tester Ninja rejected the request: "${mtnMessage}". No rows were escalated to No2Bounce.`,
+    { retryable: true }
   );
 }
 
@@ -423,6 +489,13 @@ export async function stopList(listId: string) {
     data: {
       status: "stopped",
       lastError: "Stopped manually. Results so far are kept — resume to continue.",
+      // A deliberate stop is not the auto-retry system's business -- clear
+      // its bookkeeping so the UI does not suggest a retry is still pending.
+      // A scheduled retry job that fires anyway is a no-op: the worker only
+      // acts on lists it finds still sitting in "failed".
+      retryable: false,
+      autoRetryCount: 0,
+      nextAutoRetryAt: null,
     },
   });
 }
@@ -454,30 +527,13 @@ export async function recordMtnUnreachable(params: {
     },
   });
 
-  const error = `Could not reach Mail Tester Ninja (${params.message}). No rows were charged to No2Bounce. Retry once connectivity is restored — unchecked rows will re-run on the cheap pass.`;
-
-  // Conditional update is the transition itself: once the list is "failed"
-  // it no longer matches, so an outage affecting thousands of rows moves it
-  // once and alerts once rather than per row.
-  const transitioned = await prisma.list.updateMany({
-    where: { id: params.listId, status: { in: ["running_mtn", "running_n2b"] } },
-    data: { status: "failed", lastError: error },
-  });
-  if (transitioned.count === 0) return;
-
-  const list = await prisma.list.findUnique({
-    where: { id: params.listId },
-    include: { client: true },
-  });
-  if (list) {
-    await sendAlert({
-      type: "list_failed",
-      listId: params.listId,
-      listName: list.name,
-      clientName: list.client.name,
-      error,
-    });
-  }
+  // This is the textbook transient case -- DNS, TLS, socket, timeout -- so
+  // it self-heals via markFailed's auto-retry rather than needing a click.
+  await markFailed(
+    params.listId,
+    `Could not reach Mail Tester Ninja (${params.message}). No rows were charged to No2Bounce. Unchecked rows re-run on the cheap pass automatically once it retries.`,
+    { retryable: true }
+  );
 }
 
 // Rows that exhausted MTN retries on a transient error also fall through to N2B.
@@ -628,8 +684,12 @@ async function submitN2bBatch(
   } catch (err) {
     // A rejected/failed API call must never take the whole worker process
     // down with it -- fail just this list and keep processing everything
-    // else.
-    await markFailed(listId, err instanceof Error ? err.message : String(err));
+    // else. Whether it retries itself depends on what kind of failure this
+    // was: a network blip or a provider 5xx auto-heals, a rejected request
+    // shape (like the hashkey field this API refuses) needs a code fix and
+    // would fail identically on a retry.
+    const message = err instanceof Error ? err.message : String(err);
+    await markFailed(listId, message, { retryable: isRetryableFailure(err) });
     return;
   }
 
@@ -697,7 +757,7 @@ export async function pollN2bBatchOnce(batchId: string) {
       where: { id: batchId },
       data: { status: "failed", error: result.error },
     });
-    await markFailed(batch.listId, result.error);
+    await markFailed(batch.listId, result.error, { retryable: isRetryableFailure(result.error) });
     return;
   }
 

@@ -1,8 +1,14 @@
 import "dotenv/config";
 import { Worker, type Job } from "bullmq";
-import { redisConnection, type MtnVerifyJobData, type N2bPollJobData } from "../lib/queue";
+import {
+  redisConnection,
+  type MtnVerifyJobData,
+  type N2bPollJobData,
+  type ListRetryJobData,
+} from "../lib/queue";
 import { config, assertProviderKeysConfigured, mtnRequestIntervalMs } from "../lib/config";
 import { mtnClient, classifyMtnResult, MtnRateLimitedError } from "../lib/mtn";
+import { prisma } from "../lib/prisma";
 import {
   recordMtnResult,
   recordMtnExhausted,
@@ -10,6 +16,7 @@ import {
   pollN2bBatchOnce,
   failListFromMtn,
   isListInactive,
+  retryList,
 } from "../lib/pipeline";
 
 assertProviderKeysConfigured();
@@ -141,8 +148,26 @@ const n2bPollWorker = new Worker<N2bPollJobData>(
   { connection: redisConnection }
 );
 
-for (const worker of [mtnWorker, n2bPollWorker]) {
+const listRetryWorker = new Worker<ListRetryJobData>(
+  "list-retry",
+  async (job: Job<ListRetryJobData>) => {
+    const { listId } = job.data;
+
+    // Only act if the list is still sitting exactly where it was scheduled
+    // for. A human may have already clicked Retry, Finish, or Stop, or the
+    // list may have been deleted -- any of those means there is nothing for
+    // this scheduled attempt to do.
+    const list = await prisma.list.findUnique({ where: { id: listId }, select: { status: true } });
+    if (!list || list.status !== "failed") return;
+
+    console.log(`[worker:list-retry] auto-retrying list ${listId}`);
+    await retryList(listId);
+  },
+  { connection: redisConnection }
+);
+
+for (const worker of [mtnWorker, n2bPollWorker, listRetryWorker]) {
   worker.on("error", (err) => console.error(`[worker:${worker.name}] error`, err));
 }
 
-console.log("Waterfall Verifier worker started (mtn-verify, n2b-poll queues).");
+console.log("Waterfall Verifier worker started (mtn-verify, n2b-poll, list-retry queues).");
