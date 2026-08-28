@@ -102,6 +102,17 @@ export const config = {
   domainCacheEnabled: process.env.DOMAIN_CACHE_ENABLED !== "false",
   domainCacheTtlDays: int("DOMAIN_CACHE_TTL_DAYS", 45),
 
+  // Only these email domains may hold an account. Comma-separated.
+  //
+  // Note this is a gate on the address someone types, not proof they own it:
+  // without an email confirmation step, anyone who reaches the sign-up page
+  // can claim any address at an allowed domain. It keeps the wrong domain
+  // out; it does not verify the person.
+  allowedEmailDomains: (process.env.ALLOWED_EMAIL_DOMAINS ?? "b2bdrive.net")
+    .split(",")
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
+    .filter(Boolean),
+
   // Where pipeline events are posted. A webhook rather than email/Slack
   // directly, so routing (who gets told, and how) stays a workflow concern
   // rather than something baked into this app.

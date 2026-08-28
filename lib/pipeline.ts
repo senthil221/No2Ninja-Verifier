@@ -551,7 +551,13 @@ async function finalizeMtnPass(listId: string) {
 }
 
 // Called from the UI when a paused list is approved for the paid pass.
-export async function approveN2bSubmission(listId: string) {
+export async function approveN2bSubmission(listId: string, approvedById?: string) {
+  // Record who authorised the spend before any of it happens, so every
+  // batch this list produces from here on is attributable.
+  if (approvedById) {
+    await prisma.list.update({ where: { id: listId }, data: { approvedById } });
+  }
+
   // Re-apply current classification first: never pay to re-ask something
   // MTN already answered definitively.
   await reclassifyParkedRows(listId);
@@ -686,9 +692,21 @@ async function submitN2bBatch(
     },
   });
 
-  const list = await prisma.list.findUnique({ where: { id: listId }, select: { name: true } });
+  // Attribution is read from the list rather than passed in, because
+  // follow-up batches (the second domain-probe round, or a resumed retry)
+  // are submitted by the worker, which has no session to ask.
+  const list = await prisma.list.findUnique({
+    where: { id: listId },
+    select: { name: true, approvedById: true },
+  });
   await prisma.creditLedger.create({
-    data: { listId, listName: list?.name ?? "", provider: "n2b", amount: emails.length },
+    data: {
+      listId,
+      listName: list?.name ?? "",
+      userId: list?.approvedById ?? null,
+      provider: "n2b",
+      amount: emails.length,
+    },
   });
 
   await n2bPollQueue.add(

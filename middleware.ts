@@ -8,7 +8,7 @@ import { SESSION_COOKIE } from "@/lib/session-cookie";
 // the data.
 // /api/health is public so an uptime monitor can reach it without a
 // session. It returns dependency status only -- no data.
-const PUBLIC_PATHS = ["/login", "/setup", "/api/health"];
+const PUBLIC_PATHS = ["/login", "/setup", "/signup", "/api/health"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;

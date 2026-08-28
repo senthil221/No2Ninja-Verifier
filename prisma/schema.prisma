@@ -50,14 +50,25 @@ enum N2bBatchStatus {
   failed
 }
 
+enum UserRole {
+  admin
+  member
+}
+
 model User {
   id           String    @id @default(cuid())
   email        String    @unique
   // scrypt, stored as salt:hash. Never the password itself.
   passwordHash String
+  // The first account created is the admin; everyone after is a member.
+  // Admins can see spend across all users, members only their own.
+  role         UserRole  @default(member)
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
   sessions     Session[]
+
+  approvedLists List[]         @relation("ApprovedBy")
+  creditEntries CreditLedger[]
 }
 
 // Sessions live in the database rather than in a signed cookie so they can
@@ -100,6 +111,11 @@ model List {
   // Set when the pipeline can't recover on its own (e.g. an API rejected
   // the batch) so the UI can show why instead of just a bare "failed" pill.
   lastError      String?
+  // Who authorised the paid pass. Batches are submitted asynchronously by
+  // the worker, which has no session, so the decision is recorded here at
+  // approval time and read back whenever spend is written for this list.
+  approvedById   String?
+  approvedBy     User?      @relation("ApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
   createdAt      DateTime   @default(now())
   completedAt    DateTime?
   rows           ListRow[]
@@ -194,9 +210,14 @@ model CreditLedger {
   listId    String?
   list      List?    @relation(fields: [listId], references: [id], onDelete: SetNull)
   listName  String   @default("")
+  // Nullable: entries predate attribution, and removing a user must not
+  // erase the record of what was spent.
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   provider  Provider
   amount    Int
   createdAt DateTime @default(now())
 
   @@index([listId])
+  @@index([userId])
 }

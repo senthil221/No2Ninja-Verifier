@@ -17,7 +17,9 @@ import { getSessionUser } from "@/lib/auth";
 // Server actions are POST endpoints in their own right -- a page guard does
 // not cover them, so each one asserts the session itself.
 async function assertSignedIn() {
-  if (!(await getSessionUser())) throw new Error("Not signed in");
+  const user = await getSessionUser();
+  if (!user) throw new Error("Not signed in");
+  return user;
 }
 
 export async function createClient(formData: FormData) {
@@ -59,8 +61,10 @@ export async function uploadList(clientId: string, formData: FormData) {
 }
 
 export async function approveList(listId: string) {
-  await assertSignedIn();
-  await approveN2bSubmission(listId);
+  // Spending credits is the one irreversible action here, so it is recorded
+  // against whoever authorised it.
+  const user = await assertSignedIn();
+  await approveN2bSubmission(listId, user.id);
   revalidatePath(`/lists/${listId}`);
 }
 

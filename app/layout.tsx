@@ -52,6 +52,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
 
             <nav className="sidebar-nav">
               <Link href="/">Clients</Link>
+              <Link href="/usage">Usage</Link>
               <Link href="/settings">Settings</Link>
             </nav>
 

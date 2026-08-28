@@ -2,6 +2,7 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { cookies } from "next/headers";
 import { prisma } from "./prisma";
+import { config } from "./config";
 import { SESSION_COOKIE } from "./session-cookie";
 
 const scrypt = promisify(scryptCb) as (
@@ -44,12 +45,36 @@ export async function countUsers(): Promise<number> {
   return prisma.user.count();
 }
 
+export function domainOfEmail(email: string): string {
+  return normalizeEmail(email).split("@")[1] ?? "";
+}
+
+export function isAllowedDomain(email: string): boolean {
+  const domains = config.allowedEmailDomains;
+  // An empty allow-list means unrestricted, which would be a silent
+  // widening of access -- refuse rather than let a blank setting open it up.
+  if (domains.length === 0) return false;
+  return domains.includes(domainOfEmail(email));
+}
+
 export async function createUser(email: string, password: string) {
   if (password.length < 12) {
     throw new Error("Password must be at least 12 characters");
   }
+  if (!isAllowedDomain(email)) {
+    throw new Error(`Accounts are limited to ${config.allowedEmailDomains.join(", ")} addresses`);
+  }
+
+  // Whoever sets the system up is the admin; everyone after is a member.
+  // Nobody can promote themselves by signing up later.
+  const isFirst = (await prisma.user.count()) === 0;
+
   return prisma.user.create({
-    data: { email: normalizeEmail(email), passwordHash: await hashPassword(password) },
+    data: {
+      email: normalizeEmail(email),
+      passwordHash: await hashPassword(password),
+      role: isFirst ? "admin" : "member",
+    },
   });
 }
 

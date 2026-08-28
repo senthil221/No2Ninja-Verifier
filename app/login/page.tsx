@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { authenticate, startSession, countUsers, getSessionUser } from "@/lib/auth";
 
@@ -73,6 +74,9 @@ export default async function LoginPage({
         <button type="submit" className="auth-submit">
           Sign in
         </button>
+        <p className="meta" style={{ textAlign: "center", marginTop: 12 }}>
+          Need an account? <Link href="/signup">Create one</Link>
+        </p>
       </form>
     </div>
   );
