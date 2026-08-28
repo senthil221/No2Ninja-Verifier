@@ -83,7 +83,11 @@ async function main() {
     check(list.skippedDupes === 1, `1 duplicate skipped (got ${list.skippedDupes})`);
 
     console.log("\n2. Pipeline runs end to end, unattended");
-    await startVerification(list.id);
+    // Priority 1 so these two rows jump ahead of whatever real production
+    // backlog is already queued -- without it, this waits behind however
+    // many thousand rows a real list left in front of it, which is not a
+    // reflection on the deploy being tested.
+    await startVerification(list.id, undefined, { priority: 1 });
     const status = await waitForSettled(list.id);
     check(status !== "timeout", `settled within ${TIMEOUT_MS / 1000}s (status: ${status})`);
     check(status !== "failed", "list did not fail");
