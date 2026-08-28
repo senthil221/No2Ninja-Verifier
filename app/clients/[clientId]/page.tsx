@@ -9,8 +9,7 @@ export const dynamic = "force-dynamic";
 const STATUS_LABEL: Record<string, string> = {
   pending: "Ready to start",
   running_mtn: "Running Ninja pass",
-  running_n2b: "Running NeverBounce",
-  needs_approval: "Needs approval",
+  running_n2b: "Running No2Bounce",
   completed: "Completed",
   failed: "Failed",
 };

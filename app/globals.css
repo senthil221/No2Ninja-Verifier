@@ -454,8 +454,7 @@ a > button {
 
 .pill-pending,
 .pill-running_mtn,
-.pill-running_n2b,
-.pill-needs_approval {
+.pill-running_n2b {
   background: var(--risky-soft);
   color: var(--accent-strong);
 }
@@ -739,50 +738,11 @@ a > button {
   margin-bottom: var(--s4);
 }
 
-.panel-decision {
-  border-color: #e6c199;
-  background: #fdf7f0;
-}
-
 .panel-title {
   font-size: 14.5px;
   font-weight: 660;
   letter-spacing: -0.012em;
   margin: 2px 0 var(--s3);
-}
-
-.review-split {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--s2);
-  margin-bottom: var(--s3);
-}
-
-.review-split > div {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: var(--s2) var(--s3);
-}
-
-.review-label {
-  font-size: 10px;
-  font-weight: 620;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--ink-muted);
-}
-
-.review-figure {
-  font-size: 24px;
-  font-weight: 680;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
-  margin-top: 1px;
-}
-
-.review-figure.accent {
-  color: var(--accent);
 }
 
 .review-actions {
@@ -840,9 +800,46 @@ a > button {
   transform: translateY(-1px);
 }
 
-.export-card-primary {
-  border-color: var(--valid);
+.export-primary {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  text-decoration: none;
+  color: var(--ink);
+  border: 1px solid var(--valid);
+  border-radius: var(--r-sm);
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s2);
   background: var(--valid-soft);
+  transition: border-color 0.12s ease, transform 0.08s ease;
+}
+
+.export-primary:hover {
+  border-color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.export-primary-count {
+  font-size: 30px;
+  font-weight: 680;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.export-primary-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.export-primary-label {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.export-primary-note {
+  font-size: 11.5px;
+  color: var(--ink-muted);
 }
 
 .export-count {

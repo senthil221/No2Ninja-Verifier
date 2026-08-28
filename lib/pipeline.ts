@@ -29,26 +29,6 @@ async function markFailed(listId: string, error: string) {
   });
 }
 
-async function markNeedsApproval(listId: string, creditsRequired: number) {
-  const list = await prisma.list.update({
-    where: { id: listId },
-    data: { status: "needs_approval" },
-    include: { client: true },
-  });
-  const resolved = await prisma.listRow.count({
-    where: { listId, finalStatus: { not: null } },
-  });
-  await sendAlert({
-    type: "needs_decision",
-    listId,
-    listName: list.name,
-    clientName: list.client.name,
-    resolved,
-    totalRows: list.totalRows,
-    creditsRequired,
-  });
-}
-
 async function markCompleted(listId: string) {
   const list = await prisma.list.update({
     where: { id: listId },
@@ -114,13 +94,22 @@ export async function ingestList(params: {
   return list;
 }
 
-// Begins the cheap pass for a list sitting at the pre-flight summary.
-export async function startVerification(listId: string) {
+// Begins the cheap pass for a list sitting at the pre-flight summary. This
+// is the last point at which a person is asked anything: from here the list
+// runs through Mail Tester Ninja and straight on to No2Bounce.
+export async function startVerification(listId: string, startedById?: string) {
   const list = await prisma.list.findUnique({
     where: { id: listId },
     select: { status: true },
   });
   if (!list || list.status !== "pending") return;
+
+  // Batches are submitted later, asynchronously, by the worker -- which has
+  // no session to ask. Record who authorised the run now, so every credit
+  // this list goes on to spend is attributable.
+  if (startedById) {
+    await prisma.list.update({ where: { id: listId }, data: { startedById } });
+  }
 
   await enqueuePendingRows(listId);
 }
@@ -244,8 +233,8 @@ async function enqueuePendingRows(listId: string) {
 
   if (pending.length === 0) {
     // Nothing left for the cheap pass. Rows the cache sent straight to the
-    // paid pass still have to reach the review gate, so settle the list
-    // through the normal finalize path rather than calling it done.
+    // paid pass still have to be submitted, so settle the list through the
+    // normal finalize path rather than calling it done.
     await prisma.list.update({ where: { id: listId }, data: { status: "running_mtn" } });
     await maybeFinalizeMtnPass(listId);
     return;
@@ -291,8 +280,6 @@ async function reclassifyParkedRows(listId: string) {
     const outcome = classifyMtnResult(row.mtnStatus ?? "", row.mtnMessage!);
     if (outcome !== "valid" && outcome !== "invalid") continue;
 
-    // Respect the current escalation policy: under all_except_valid an
-    // "invalid" row stays parked for its second opinion.
     const settled = settleMtnOutcome(outcome);
     if (!settled) continue;
 
@@ -396,14 +383,15 @@ function mtnVerdictFor(outcome: "valid" | "invalid" | "ambiguous"): FinalStatus 
 
 // Whether MTN's verdict is the final word for this row, or whether it hands
 // on to the paid pass. Returns null to escalate.
+//
+// Only what MTN could not answer is worth paying for -- Catch-All, and the
+// results it retried and still could not resolve (SPAM Block, Timeout, MX
+// Error, Limited). Its "Rejected" and "No MX" are conclusive: the server
+// refused the address, or the domain cannot receive mail at all. Buying a
+// second opinion on those spends a credit to be told the same thing.
 function settleMtnOutcome(outcome: "valid" | "invalid" | "ambiguous"): FinalStatus | null {
   if (outcome === "valid") return "valid";
-
-  if (outcome === "invalid") {
-    // Under all_except_valid, MTN's "invalid" is treated as an opinion to be
-    // confirmed rather than a conclusion, so the row escalates.
-    return config.mtnEscalationPolicy === "all_except_valid" ? null : "invalid";
-  }
+  if (outcome === "invalid") return "invalid";
 
   // Catch-all.
   return config.catchAllHandling === "accept" ? "risky" : null;
@@ -415,7 +403,7 @@ function settleMtnOutcome(outcome: "valid" | "invalid" | "ambiguous"): FinalStat
 export async function failListFromMtn(listId: string, mtnMessage: string) {
   await markFailed(
     listId,
-    `Mail Tester Ninja rejected the request: "${mtnMessage}". No rows were escalated to NeverBounce. Check MTN_API_KEY.`
+    `Mail Tester Ninja rejected the request: "${mtnMessage}". No rows were escalated to No2Bounce. Check MTN_API_KEY.`
   );
 }
 
@@ -431,7 +419,7 @@ export async function isListInactive(listId: string) {
 // already verified is kept, and resuming picks up from there.
 export async function stopList(listId: string) {
   await prisma.list.updateMany({
-    where: { id: listId, status: { in: ["running_mtn", "running_n2b", "needs_approval"] } },
+    where: { id: listId, status: { in: ["running_mtn", "running_n2b"] } },
     data: {
       status: "stopped",
       lastError: "Stopped manually. Results so far are kept — resume to continue.",
@@ -466,7 +454,7 @@ export async function recordMtnUnreachable(params: {
     },
   });
 
-  const error = `Could not reach Mail Tester Ninja (${params.message}). No rows were charged to NeverBounce. Retry once connectivity is restored — unchecked rows will re-run on the cheap pass.`;
+  const error = `Could not reach Mail Tester Ninja (${params.message}). No rows were charged to No2Bounce. Retry once connectivity is restored — unchecked rows will re-run on the cheap pass.`;
 
   // Conditional update is the transition itself: once the list is "failed"
   // it no longer matches, so an outage affecting thousands of rows moves it
@@ -528,6 +516,10 @@ async function maybeFinalizeMtnPass(listId: string) {
   await finalizeMtnPass(listId);
 }
 
+// The cheap pass is done. Whatever it could not answer goes straight on to
+// No2Bounce -- there is no checkpoint here. The spend was authorised when
+// the run was started, and the rows that reach this point are only the ones
+// MTN genuinely could not resolve.
 async function finalizeMtnPass(listId: string) {
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
@@ -539,48 +531,6 @@ async function finalizeMtnPass(listId: string) {
     return;
   }
 
-  // Pause before spending. Credits are the expensive, irreversible part of
-  // this pipeline, so the default is that a person sees what the cheap pass
-  // found -- and what the paid pass would cost -- and decides.
-  if (config.n2b.requireApproval || needsN2b.length > config.n2b.singleListCreditCap) {
-    await markNeedsApproval(listId, needsN2b.length);
-    return;
-  }
-
-  await submitN2bBatch(listId, needsN2b);
-}
-
-// Called from the UI when a paused list is approved for the paid pass.
-export async function approveN2bSubmission(listId: string, approvedById?: string) {
-  // Record who authorised the spend before any of it happens, so every
-  // batch this list produces from here on is attributable.
-  if (approvedById) {
-    await prisma.list.update({ where: { id: listId }, data: { approvedById } });
-  }
-
-  // Re-apply current classification first: never pay to re-ask something
-  // MTN already answered definitively.
-  await reclassifyParkedRows(listId);
-
-  // Reclassifying can hand rows back to the cheap pass (ones MTN was never
-  // actually reached for). Finish that before spending anything.
-  const stillPending = await prisma.listRow.count({ where: { listId, stage: "pending" } });
-  if (stillPending > 0) {
-    await enqueuePendingRows(listId);
-    return;
-  }
-
-  const needsN2b = await prisma.listRow.findMany({
-    where: { listId, stage: "needs_n2b" },
-    select: { id: true, normalizedEmail: true, mtnMessage: true },
-  });
-
-  if (needsN2b.length === 0) {
-    await markCompleted(listId);
-    return;
-  }
-
-  await prisma.list.update({ where: { id: listId }, data: { status: "running_n2b" } });
   await submitN2bBatch(listId, needsN2b);
 }
 
@@ -697,13 +647,13 @@ async function submitN2bBatch(
   // are submitted by the worker, which has no session to ask.
   const list = await prisma.list.findUnique({
     where: { id: listId },
-    select: { name: true, approvedById: true },
+    select: { name: true, startedById: true },
   });
   await prisma.creditLedger.create({
     data: {
       listId,
       listName: list?.name ?? "",
-      userId: list?.approvedById ?? null,
+      userId: list?.startedById ?? null,
       provider: "n2b",
       amount: emails.length,
     },

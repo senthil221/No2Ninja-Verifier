@@ -11,7 +11,7 @@ Verify prospect lists across two providers with very different economics:
 - **Mail Tester Ninja (MTN)** — flat-rate, effectively free per check, but
   **no bulk endpoint** and rate limited (57 requests / 10s on the Ultimate
   plan). One HTTP call per address.
-- **NeverBounce / no2bounce (N2B)** — **one credit per address**, real bulk
+- **No2Bounce (N2B)** — **one credit per address**, real bulk
   API, better at the cases MTN cannot resolve.
 
 So: run everything through the free provider, and pay only for what it
@@ -20,18 +20,34 @@ could not answer.
 ## Pipeline
 
 ```
-Upload → Pre-flight → [cache] → MTN pass → Review gate → N2B pass → Export
-                         ↑                      ↑
-                    free, no API          human decides spend
+Upload → Pre-flight → [cache] → MTN pass → N2B pass → Export
+                         ↑            ↑          ↑
+                    free, no API   free      1 credit/address
 ```
 
-Statuses: `pending` → `running_mtn` → `needs_approval` → `running_n2b` →
-`completed`. Plus `failed` (something broke) and `stopped` (halted by hand).
-Both keep results and can resume.
+Statuses: `pending` → `running_mtn` → `running_n2b` → `completed`. Plus
+`failed` (something broke) and `stopped` (halted by hand). Both keep results
+and can resume.
 
-**Two deliberate stopping points.** Nothing runs until Start is pressed, and
-nothing is *charged* until the review gate is approved. Credits are the only
-irreversible thing here, so spending them is never automatic.
+**One deliberate stopping point.** Nothing runs until Start is pressed; the
+pre-flight summary before it is where the spend is authorised, and the
+person who presses it is who the credits are attributed to. After that the
+two passes run through without another prompt.
+
+**What counts as valid.** No2Bounce answers `Deliverable`,
+`CatchAll`/`AcceptAll`, `Invalid`, `Bounce` or `Spam`, alone or combined
+(`Deliverable/AcceptAll`). Only a plain `Deliverable` becomes valid. The
+disqualifiers are matched *before* the word "deliverable" is honoured, since
+"UnDeliverable" contains it and a spam trap is deliverable in the literal
+sense -- the ordering in `mapN2bStatus` is the rule, not an optimisation.
+
+**What the paid pass is asked to answer.** Only the results the cheap pass
+could not resolve: `Catch-All`, and `SPAM Block` / `Timeout` / `MX Error` /
+`Limited` once MTN's own retries are spent. `Accepted` settles valid;
+`Rejected` and `No MX` settle invalid. The last two are the important half
+of the rule -- the server refused the address, or the domain has no mail
+exchanger at all, and buying a second opinion on either is a credit spent
+to hear the same answer.
 
 ## The cost model, which drives most decisions
 
@@ -41,7 +57,7 @@ obtainable for free.
 | Layer | Saves |
 |---|---|
 | Within-file dedup | duplicate addresses in one upload |
-| `EmailCache` -- NeverBounce verdicts only | re-paying for an address already bought |
+| `EmailCache` -- No2Bounce verdicts only | re-paying for an address already bought |
 | `DomainCache` (per domain) | see below |
 | Domain probing within a batch | one paid check answers for a whole domain |
 
@@ -49,7 +65,7 @@ obtainable for free.
 its verdicts saves nothing while risking a stale one -- people change roles
 and mailboxes close, and a months-old "Accepted" becomes a bounce that costs
 sender reputation. Its results are re-verified every time by default
-(`MTN_CACHE_TTL_DAYS=0`). NeverBounce costs a credit per address, so its
+(`MTN_CACHE_TTL_DAYS=0`). No2Bounce costs a credit per address, so its
 verdicts are reused for 90 days. The same split applies to domain facts:
 no-MX (from the free provider) follows the MTN setting, confirmed catch-all
 (paid) does not.

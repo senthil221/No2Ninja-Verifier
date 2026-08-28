@@ -11,7 +11,6 @@ enum ListStatus {
   pending
   running_mtn
   running_n2b
-  needs_approval
   completed
   failed
   stopped
@@ -67,7 +66,7 @@ model User {
   lastLoginAt  DateTime?
   sessions     Session[]
 
-  approvedLists List[]         @relation("ApprovedBy")
+  startedLists  List[]         @relation("StartedBy")
   creditEntries CreditLedger[]
 }
 
@@ -111,11 +110,12 @@ model List {
   // Set when the pipeline can't recover on its own (e.g. an API rejected
   // the batch) so the UI can show why instead of just a bare "failed" pill.
   lastError      String?
-  // Who authorised the paid pass. Batches are submitted asynchronously by
-  // the worker, which has no session, so the decision is recorded here at
-  // approval time and read back whenever spend is written for this list.
-  approvedById   String?
-  approvedBy     User?      @relation("ApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  // Who started the run, and so authorised whatever it goes on to spend.
+  // Batches are submitted asynchronously by the worker, which has no
+  // session, so it is recorded here at start time and read back whenever
+  // spend is written for this list.
+  startedById    String?
+  startedBy      User?      @relation("StartedBy", fields: [startedById], references: [id], onDelete: SetNull)
   createdAt      DateTime   @default(now())
   completedAt    DateTime?
   rows           ListRow[]
@@ -175,7 +175,7 @@ model DomainCache {
   // "unknown" is never mistaken for "no".
   isCatchAll Boolean?
   hasNoMx    Boolean?
-  // Which provider established catch-all. NeverBounce reports it directly
+  // Which provider established catch-all. No2Bounce reports it directly
   // and is treated as authoritative; Mail Tester Ninja's view is a strong
   // hint but is confirmed before it is used to skip paid checks.
   catchAllSource String?

@@ -3,13 +3,13 @@
 Orchestrates prospect list email verification as a two-stage waterfall:
 
 1. **Pass 1 — Mail Tester Ninja** (cheap, single-call, rate-limited): every row is checked here first.
-2. **Pass 2 — NeverBounce (no2bounce)** (bulk, pricier): only rows MTN couldn't confidently resolve are re-checked, in one bulk submission per list.
+2. **Pass 2 — No2Bounce** (bulk, pricier): only rows MTN couldn't confidently resolve are re-checked, in one bulk submission per list. It follows the first pass automatically — there is no approval step in between.
 
 A global `EmailCache` means any address already verified in a past list — for any client — is never re-paid for again, as long as the cached result is within the configured freshness window.
 
 ## Stack
 
-Next.js (App Router) + Prisma/Postgres for the app, Redis + BullMQ for the rate-limited MTN queue and the NeverBounce polling queue, run as a separate worker process. Docker Compose ties it together.
+Next.js (App Router) + Prisma/Postgres for the app, Redis + BullMQ for the rate-limited MTN queue and the No2Bounce polling queue, run as a separate worker process. Docker Compose ties it together.
 
 ## Setup
 
@@ -56,14 +56,17 @@ npm run worker      # in a second terminal — BullMQ worker
 
 ## How a list moves through the pipeline
 
-`pending → running_mtn → running_n2b → completed` (or `needs_approval` if Pass 2 would exceed the configured per-list credit cap, or `failed` on an unrecoverable error).
+`pending → running_mtn → running_n2b → completed` (or `failed` on an unrecoverable error, or `stopped` if halted by hand). Pressing Start is the only checkpoint: from there the list runs both passes unattended.
 
-- MTN's `Timeout` / `Mx Error` / `SPAM Block` results are treated as transient and retried on MTN itself (`MTN_MAX_RETRIES`) before falling through to Pass 2 — this avoids spending a NeverBounce credit on something that just needed a retry.
-- MTN's `Catch-All` result is ambiguous; `CATCH_ALL_HANDLING` controls whether it's accepted as-is or escalated to NeverBounce (default: escalate).
-- Before a Pass 2 batch is submitted, if it would exceed `N2B_SINGLE_LIST_CREDIT_CAP`, the list pauses at `needs_approval` and must be approved manually from the list's page in the UI.
+- Exactly five MTN results reach Pass 2: `Catch-All`, `SPAM Block`, `Timeout`, `Mx Error` and `Limited`. `Accepted` settles as valid; `Rejected` and `No MX` settle as invalid — the address was refused, or the domain has nowhere to deliver, so a paid second opinion buys nothing.
+- `Timeout` / `Mx Error` / `SPAM Block` are retried on MTN itself first (`MTN_MAX_RETRIES`), so a blip doesn't cost a credit.
+- `CATCH_ALL_HANDLING` controls whether `Catch-All` is accepted as risky or escalated (default: escalate).
+- `Limited` never settles as valid even when MTN pairs it with an `ok` code: a limited answer is the server declining to finish the check, not a confirmation.
+- When the list finishes, one export merges both passes: **Valid only** is the send list, whichever engine established each address.
+- Only a confirmed mailbox counts as valid. No2Bounce answers `Deliverable`, `CatchAll`/`AcceptAll`, `Invalid`, `Bounce` or `Spam` — only a plain `Deliverable` maps to valid. An accept-all deliverable is the domain accepting every address, and a spam trap is deliverable in the literal sense; both are risky, so neither reaches the send list.
 
 ## Known gaps / things to verify before relying on this in production
 
 - **No authentication yet.** The `User` model exists in the schema but there's no login flow. Put this behind your own reverse proxy / VPN (the same way you likely already gate n8n) before exposing it beyond localhost.
-- **NeverBounce small-list (≤20K) completion response shape is unconfirmed.** The public API docs page doesn't show a literal example of the per-email result payload for inline (non-signed-URL) responses, or the exact CSV column headers in the signed-URL file for large batches. `lib/n2b.ts` (`poll` and `fetchSignedUrlResults`) parses defensively against several likely field names, but this is the one integration point that should be checked against a real test batch — if it doesn't match, that's the only file that needs adjusting.
+- **No2Bounce small-list (≤20K) completion response shape is unconfirmed.** The public API docs page doesn't show a literal example of the per-email result payload for inline (non-signed-URL) responses, or the exact CSV column headers in the signed-URL file for large batches. `lib/n2b.ts` (`poll` and `fetchSignedUrlResults`) parses defensively against several likely field names, but this is the one integration point that should be checked against a real test batch — if it doesn't match, that's the only file that needs adjusting.
 - No CSV column-mapping UI yet — the uploader auto-detects a column named (or containing) "email", or falls back to the first column.

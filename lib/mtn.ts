@@ -11,8 +11,12 @@ export interface MtnResult {
 
 // How a raw MTN response maps onto the pipeline's decision tree.
 //   - final/valid    -> row is done, mark valid
-//   - final/invalid  -> row is done, mark invalid, no retry
-//   - transient      -> retry on MTN before giving up
+//   - final/invalid  -> row is done, mark invalid, no retry, never escalated.
+//                       Rejected and No MX land here: the server refused the
+//                       address, or the domain has nowhere to deliver at all.
+//                       Neither is worth paying for a second opinion.
+//   - transient      -> retry on MTN, then hand to No2Bounce if still
+//                       unanswered (Timeout, MX Error, SPAM Block, Limited)
 //   - ambiguous      -> catch-all; behavior controlled by CATCH_ALL_HANDLING
 //   - fatal          -> our account/key is broken, not this address. Stop the
 //                       whole list. Never escalate these to N2B: a bad key
@@ -28,10 +32,6 @@ export type MtnOutcome = "valid" | "invalid" | "transient" | "ambiguous" | "fata
 // answered definitively, paying the expensive provider for nothing.
 const MESSAGE_OUTCOME: Record<string, MtnOutcome> = {
   accepted: "valid",
-  // Deliberately not "valid": we have never observed which code accompanies
-  // "Limited", and asserting deliverability we cannot back sends mail to an
-  // unverified address. A bounce costs sender reputation; escalating costs
-  // one credit. When the code is present it decides this anyway.
   limited: "transient",
   rejected: "invalid",
   "no mx": "invalid",
@@ -40,6 +40,18 @@ const MESSAGE_OUTCOME: Record<string, MtnOutcome> = {
   timeout: "transient",
   "spam block": "transient",
   "disabled key": "fatal",
+};
+
+// Messages that decide the outcome whatever code accompanies them.
+//
+// "Limited" is the one that matters. MTN can pair it with `ok`, but a
+// limited answer is the server declining to complete the check, not a
+// confirmation of the mailbox -- and it is on the list of results that
+// belong in the paid pass. Asserting deliverability we cannot back sends
+// mail to an unverified address: a bounce costs sender reputation, a second
+// opinion costs one credit.
+const MESSAGE_OVERRIDE: Record<string, MtnOutcome> = {
+  limited: "transient",
 };
 
 function normalize(message: string): string {
@@ -54,6 +66,9 @@ function normalize(message: string): string {
 export function classifyMtnResult(code: string, message: string): MtnOutcome {
   // An account-level failure is not a statement about the address at all.
   if (isAccountFailure(message)) return "fatal";
+
+  const override = MESSAGE_OVERRIDE[normalize(message)];
+  if (override) return override;
 
   switch (normalize(code)) {
     case "ok":

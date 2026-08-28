@@ -37,7 +37,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="card">
-        <h2>NeverBounce (no2bounce)</h2>
+        <h2>No2Bounce</h2>
         <div className="kv-row">
           <span className="k">API token</span>
           <code>{mask(config.n2b.apiToken)}</code>
@@ -45,14 +45,6 @@ export default function SettingsPage() {
         <div className="kv-row">
           <span className="k">Poll interval</span>
           <code>{config.n2b.pollIntervalMs}ms</code>
-        </div>
-        <div className="kv-row">
-          <span className="k">Pause for approval before spending</span>
-          <code>{config.n2b.requireApproval ? "yes, every list" : "only over the cap"}</code>
-        </div>
-        <div className="kv-row">
-          <span className="k">Single-list credit cap</span>
-          <code>{config.n2b.singleListCreditCap}</code>
         </div>
       </div>
 
@@ -64,19 +56,23 @@ export default function SettingsPage() {
         </div>
         <div className="kv-row">
           <span className="k">Events sent</span>
-          <code>list_failed · needs_decision · list_completed</code>
+          <code>list_failed · list_completed · provider_unavailable</code>
         </div>
       </div>
 
       <div className="card">
         <h2>Pipeline behavior</h2>
         <div className="kv-row">
-          <span className="k">Sent on to NeverBounce</span>
-          <code>
-            {config.mtnEscalationPolicy === "all_except_valid"
-              ? "everything except confirmed valid"
-              : "only rows MTN couldn't answer"}
-          </code>
+          <span className="k">Sent on to No2Bounce</span>
+          <code>catch-all, SPAM block, timeout, MX error, limited</code>
+        </div>
+        <div className="kv-row">
+          <span className="k">Settled by Mail Tester Ninja alone</span>
+          <code>accepted &rarr; valid · rejected, no MX &rarr; invalid</code>
+        </div>
+        <div className="kv-row">
+          <span className="k">Counted valid from No2Bounce</span>
+          <code>deliverable only &mdash; not catch-all, spam, bounce or invalid</code>
         </div>
         <div className="kv-row">
           <span className="k">Catch-all handling</span>
@@ -91,7 +87,7 @@ export default function SettingsPage() {
           </code>
         </div>
         <div className="kv-row">
-          <span className="k">Reuse NeverBounce results</span>
+          <span className="k">Reuse No2Bounce results</span>
           <code>
             {config.n2bCacheTtlDays > 0
               ? `${config.n2bCacheTtlDays} days`

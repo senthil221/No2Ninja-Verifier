@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseResultCsv } from "./n2b";
 
-// Captured verbatim from a real NeverBounce report. None of this is in the
+// Captured verbatim from a real No2Bounce report. None of this is in the
 // public docs, and the verdict column ("finalScoreValue") contains none of
 // the words a naive header match would look for -- which is exactly how it
 // got missed once already.
@@ -51,4 +51,42 @@ test("tolerates an unknown verdict column name", () => {
 a@b.com,Deliverable`);
   assert.equal(rows[0]!.email, "a@b.com");
   assert.equal(rows[0]!.status, "valid");
+});
+
+// The export's "valid" file is what actually gets mailed, so the one thing
+// that must never drift is which verdicts are allowed into it. No2Bounce
+// answers with Deliverable, CatchAll/AcceptAll, Invalid, Bounce or Spam --
+// only the first is a statement about the mailbox.
+const VERDICTS: [string, "valid" | "invalid" | "risky" | "unknown"][] = [
+  ["Deliverable", "valid"],
+  ["CatchAll", "risky"],
+  ["AcceptAll", "risky"],
+  ["Deliverable/AcceptAll", "risky"],
+  ["Invalid", "invalid"],
+  ["UnDeliverable", "invalid"],
+  ["Bounce", "invalid"],
+  ["Spam", "risky"],
+  ["Deliverable/Spam", "risky"],
+];
+
+function statusOf(verdict: string) {
+  return parseResultCsv(`email,finalScoreValue\nx@y.com,${verdict}`)[0]!.status;
+}
+
+test("only a confirmed deliverable is counted valid", () => {
+  for (const [verdict, expected] of VERDICTS) {
+    assert.equal(statusOf(verdict), expected, `"${verdict}" should map to ${expected}`);
+  }
+});
+
+test("nothing but a plain deliverable ever reaches the send list", () => {
+  for (const [verdict, expected] of VERDICTS) {
+    if (expected === "valid") continue;
+    assert.notEqual(statusOf(verdict), "valid", `"${verdict}" must never be valid`);
+  }
+  // A spam trap is deliverable in the literal sense, which is exactly why
+  // the disqualifiers are checked before the word "deliverable" is honoured.
+  assert.notEqual(statusOf("Deliverable/SpamTrap"), "valid");
+  // And a verdict nobody has seen before is not guessed into the send list.
+  assert.notEqual(statusOf("Some Future Verdict"), "valid");
 });

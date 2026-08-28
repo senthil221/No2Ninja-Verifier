@@ -9,15 +9,6 @@ export type AlertEvent =
       error: string;
     }
   | {
-      type: "needs_decision";
-      listId: string;
-      listName: string;
-      clientName: string;
-      resolved: number;
-      totalRows: number;
-      creditsRequired: number;
-    }
-  | {
       type: "list_completed";
       listId: string;
       listName: string;
@@ -34,7 +25,6 @@ export type AlertEvent =
 
 const SUMMARY: Record<AlertEvent["type"], string> = {
   list_failed: "A list stopped before finishing",
-  needs_decision: "A list is waiting on your approval to spend credits",
   list_completed: "A list finished verifying",
   provider_unavailable: "A verification provider is not responding",
 };

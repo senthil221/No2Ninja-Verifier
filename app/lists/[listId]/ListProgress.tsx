@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  approveList,
   retryFailedList,
   finishListWithoutN2b,
   beginVerification,
@@ -40,7 +39,7 @@ interface StatusPayload {
 // Statuses where nothing moves without a person acting. Polling pauses here
 // to avoid pointless requests, and every action resumes it -- forgetting
 // that is what previously left the page frozen after "Start verification".
-const AWAITING_ACTION = new Set(["pending", "needs_approval", "failed", "stopped"]);
+const AWAITING_ACTION = new Set(["pending", "failed", "stopped"]);
 const FINISHED = new Set(["completed"]);
 
 const STATUS_COLOR_VAR: Record<string, string> = {
@@ -69,8 +68,7 @@ function formatEta(seconds: number): string {
 const STEPS = [
   { key: "preflight", label: "Pre-flight" },
   { key: "mtn", label: "Mail Tester Ninja" },
-  { key: "review", label: "Your review" },
-  { key: "n2b", label: "NeverBounce" },
+  { key: "n2b", label: "No2Bounce" },
   { key: "done", label: "Done" },
 ];
 
@@ -80,12 +78,10 @@ function stepIndexFor(status: string): number {
       return 0;
     case "running_mtn":
       return 1;
-    case "needs_approval":
-      return 2;
     case "running_n2b":
-      return 3;
+      return 2;
     case "completed":
-      return 4;
+      return 3;
     default:
       return 1;
   }
@@ -113,14 +109,21 @@ function Stepper({ status }: { status: string }) {
   );
 }
 
-function ExportMenu({ listId, counts }: { listId: string; counts: Record<string, number> }) {
+function ExportMenu({
+  listId,
+  counts,
+  bySource,
+}: {
+  listId: string;
+  counts: Record<string, number>;
+  bySource: Record<string, number>;
+}) {
   const valid = counts.valid ?? 0;
   const risky = counts.risky ?? 0;
   const invalid = counts.invalid ?? 0;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
 
   const options = [
-    { filter: "valid", label: "Valid only", note: "ready to send", count: valid, primary: true },
     {
       filter: "sendable",
       label: "Valid + catch-all",
@@ -132,19 +135,35 @@ function ExportMenu({ listId, counts }: { listId: string; counts: Record<string,
   ];
 
   return (
-    <div className="export-grid">
-      {options.map((o) => (
-        <a
-          key={o.filter}
-          className={`export-card${o.primary ? " export-card-primary" : ""}`}
-          href={`/api/lists/${listId}/export?filter=${o.filter}`}
-        >
-          <span className="export-count num">{o.count}</span>
-          <span className="export-label">{o.label}</span>
-          <span className="export-note">{o.note}</span>
-        </a>
-      ))}
-    </div>
+    <>
+      {/* The whole point of the run: every address either pass confirmed,
+          in one file, whichever engine established it. */}
+      <a className="export-primary" href={`/api/lists/${listId}/export?filter=valid`}>
+        <span className="export-primary-count num">{valid}</span>
+        <span className="export-primary-body">
+          <span className="export-primary-label">Download valid addresses</span>
+          <span className="export-primary-note">
+            Both passes combined &mdash; <span className="num">{bySource.mtn ?? 0}</span> from
+            Ninja, <span className="num">{bySource.n2b ?? 0}</span> from No2Bounce,{" "}
+            <span className="num">{bySource.cache ?? 0}</span> from cache
+          </span>
+        </span>
+      </a>
+
+      <div className="export-grid">
+        {options.map((o) => (
+          <a
+            key={o.filter}
+            className="export-card"
+            href={`/api/lists/${listId}/export?filter=${o.filter}`}
+          >
+            <span className="export-count num">{o.count}</span>
+            <span className="export-label">{o.label}</span>
+            <span className="export-note">{o.note}</span>
+          </a>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -250,7 +269,8 @@ export default function ListProgress({ listId }: { listId: string }) {
             </button>
           </div>
           <p className="meta">
-            You&apos;ll get another checkpoint before anything is sent to NeverBounce.
+            Starting runs both passes without stopping: Mail Tester Ninja first, then only what
+            it could not answer goes to No2Bounce at one credit each.
           </p>
         </div>
       )}
@@ -317,7 +337,7 @@ export default function ListProgress({ listId }: { listId: string }) {
               <span className="num">{data.bySource.mtn ?? 0}</span> from Ninja
             </span>
             <span>
-              <span className="num">{data.bySource.n2b ?? 0}</span> from NeverBounce
+              <span className="num">{data.bySource.n2b ?? 0}</span> from No2Bounce
             </span>
             <span>
               <span className="num">{data.n2bCreditsSpent}</span> credits used
@@ -326,63 +346,32 @@ export default function ListProgress({ listId }: { listId: string }) {
         </>
       )}
 
-      {/* ---------- Step 3: review gate ---------- */}
-      {data.status === "needs_approval" && (
-        <div className="panel-action panel-decision">
-          <span className="eyebrow">Your decision</span>
-          <h3 className="panel-title">Mail Tester Ninja finished. Continue to NeverBounce?</h3>
-
-          <div className="review-split">
-            <div>
-              <div className="review-label">Resolved, no further cost</div>
-              <div className="review-figure num">{data.resolved}</div>
-              <div className="meta">of {data.totalRows} rows</div>
-            </div>
-            <div>
-              <div className="review-label">Would cost credits</div>
-              <div className="review-figure num accent">{data.pendingN2b}</div>
-              <div className="meta">1 credit per address</div>
-            </div>
-          </div>
-
-          {data.pendingN2bReasons.length > 0 && (
-            <table className="reason-table">
-              <thead>
-                <tr>
-                  <th>Why it&apos;s unresolved</th>
-                  <th className="right">Rows</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.pendingN2bReasons.map((r) => (
-                  <tr key={r.reason}>
-                    <td>{r.reason}</td>
-                    <td className="num right">{r.count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          <div className="review-actions">
-            <button
-              disabled={busy !== null}
-              onClick={() => run("approve", () => approveList(listId))}
-            >
-              {busy === "approve" ? "Submitting…" : `Verify ${data.pendingN2b} with NeverBounce`}
-            </button>
-            <button
-              className="btn-quiet"
-              disabled={busy !== null}
-              onClick={() => run("finish", () => finishListWithoutN2b(listId))}
-            >
-              {busy === "finish" ? "Finishing…" : "Finish without NeverBounce"}
-            </button>
-          </div>
-          <p className="meta">
-            Finishing keeps every result found so far and spends nothing. Unresolved rows are
-            marked risky or unknown.
+      {/* ---------- What the paid pass is working through ---------- */}
+      {data.status === "running_n2b" && data.pendingN2bReasons.length > 0 && (
+        <div className="section">
+          <h3 className="section-title">
+            With No2Bounce: <span className="num">{data.pendingN2b}</span>
+          </h3>
+          <p className="meta section-sub">
+            Everything Mail Tester Ninja could not answer, at one credit each. Rejected and
+            no-MX addresses are settled already and cost nothing.
           </p>
+          <table className="reason-table">
+            <thead>
+              <tr>
+                <th>Why it&apos;s unresolved</th>
+                <th className="right">Rows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.pendingN2bReasons.map((r) => (
+                <tr key={r.reason}>
+                  <td>{r.reason}</td>
+                  <td className="num right">{r.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -433,7 +422,7 @@ export default function ListProgress({ listId }: { listId: string }) {
               disabled={busy !== null}
               onClick={() => run("finish", () => finishListWithoutN2b(listId))}
             >
-              {busy === "finish" ? "Finishing…" : "Finish without NeverBounce"}
+              {busy === "finish" ? "Finishing…" : "Finish without No2Bounce"}
             </button>
           </div>
         </div>
@@ -444,10 +433,11 @@ export default function ListProgress({ listId }: { listId: string }) {
         <div className="section">
           <h3 className="section-title">Export</h3>
           <p className="meta section-sub">
-            One file, both providers merged. Every row keeps your original columns plus its
-            status and which engine resolved it.
+            One file, both providers merged. Valid means a confirmed mailbox and nothing else
+            &mdash; catch-all, spam, bounce and invalid are all left out of it. Every row keeps
+            your original columns plus its status and which engine resolved it.
           </p>
-          <ExportMenu listId={listId} counts={data.byFinalStatus} />
+          <ExportMenu listId={listId} counts={data.byFinalStatus} bySource={data.bySource} />
         </div>
       )}
 
@@ -469,7 +459,7 @@ export default function ListProgress({ listId }: { listId: string }) {
                   <td>{b.mtnMessage}</td>
                   <td>
                     {b.escalates ? (
-                      <span className="dest-n2b">&rarr; NeverBounce</span>
+                      <span className="dest-n2b">&rarr; No2Bounce</span>
                     ) : (
                       <span className={`pill pill-res-${b.finalStatus ?? "unknown"}`}>
                         {b.finalStatus ?? "pending"}

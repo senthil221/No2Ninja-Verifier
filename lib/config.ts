@@ -62,28 +62,11 @@ export const config = {
     apiToken: credential("N2B_API_TOKEN"),
     baseUrl: endpoint("N2B_BASE_URL", "https://connect.no2bounce.com/v2/n2b_validate_bulk"),
     pollIntervalMs: int("N2B_POLL_INTERVAL_MS", 15_000),
-    singleListCreditCap: int("N2B_SINGLE_LIST_CREDIT_CAP", 5000),
-    // Every list pauses after the cheap pass so a human sees what it found
-    // and what the paid pass would cost before any credits are spent. Set
-    // N2B_REQUIRE_APPROVAL=false to auto-continue under the credit cap.
-    requireApproval: process.env.N2B_REQUIRE_APPROVAL !== "false",
   },
 
   catchAllHandling: (process.env.CATCH_ALL_HANDLING === "accept" ? "accept" : "n2b") as
     | "accept"
     | "n2b",
-
-  // What the cheap pass hands on to the paid pass.
-  //   all_except_valid - anything MTN did not confirm deliverable gets a
-  //                      second opinion. Costs more, but MTN's "Rejected"
-  //                      can be a false negative (servers that refuse
-  //                      verification probes), and a wrongly discarded
-  //                      prospect costs more than a credit.
-  //   unresolved       - only rows MTN could not answer (catch-all, blocked)
-  //                      escalate; its invalid verdicts are trusted as final.
-  mtnEscalationPolicy: (process.env.MTN_ESCALATION_POLICY === "unresolved"
-    ? "unresolved"
-    : "all_except_valid") as "all_except_valid" | "unresolved",
 
   // Reuse is priced differently per provider, so the two are set separately.
   //
@@ -92,7 +75,7 @@ export const config = {
   // change roles and mailboxes are closed; a months-old "Accepted" becomes a
   // bounce, and bounces cost sender reputation. Default 0 (re-verify always).
   mtnCacheTtlDays: int("MTN_CACHE_TTL_DAYS", 0),
-  // NeverBounce costs a credit per address, so its verdicts are worth
+  // No2Bounce costs a credit per address, so its verdicts are worth
   // reusing. Its catch-all finding is a domain property and rarely changes.
   n2bCacheTtlDays: int("N2B_CACHE_TTL_DAYS", 90),
 

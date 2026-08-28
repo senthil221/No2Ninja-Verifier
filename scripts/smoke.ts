@@ -6,8 +6,10 @@
  * cleanly and were completely broken. This drives an actual list through
  * ingest, the caches and the cheap provider, then deletes what it created.
  *
- * It does NOT spend NeverBounce credits: it stops at the review gate, which
- * is where a real list stops.
+ * It does NOT spend No2Bounce credits, and that is an assertion rather than
+ * an arrangement: both fixture addresses are ones Mail Tester Ninja settles
+ * on its own (Rejected, No MX). If either ever escalates, the credit check
+ * at the end fails and says so.
  *
  *   npm run smoke
  */
@@ -43,6 +45,8 @@ function check(ok: boolean, message: string) {
   if (!ok) failures.push(message);
 }
 
+const IN_FLIGHT = new Set(["pending", "running_mtn", "running_n2b"]);
+
 async function waitForSettled(listId: string): Promise<string> {
   const deadline = Date.now() + TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -50,7 +54,7 @@ async function waitForSettled(listId: string): Promise<string> {
       where: { id: listId },
       select: { status: true },
     });
-    if (list.status !== "running_mtn" && list.status !== "pending") return list.status;
+    if (!IN_FLIGHT.has(list.status)) return list.status;
     await new Promise((r) => setTimeout(r, 2000));
   }
   return "timeout";
@@ -78,11 +82,13 @@ async function main() {
     check(list.skippedInvalid === 1, `1 malformed address skipped (got ${list.skippedInvalid})`);
     check(list.skippedDupes === 1, `1 duplicate skipped (got ${list.skippedDupes})`);
 
-    console.log("\n2. Pipeline runs to a decision point");
+    console.log("\n2. Pipeline runs end to end, unattended");
     await startVerification(list.id);
     const status = await waitForSettled(list.id);
     check(status !== "timeout", `settled within ${TIMEOUT_MS / 1000}s (status: ${status})`);
     check(status !== "failed", "list did not fail");
+    // There is no gate any more: a list that finishes has actually finished.
+    check(status === "completed", `ran through to completion unattended (status: ${status})`);
 
     const rows = await prisma.listRow.findMany({ where: { listId: list.id } });
 
@@ -101,17 +107,19 @@ async function main() {
 
     console.log("\n4. Prior knowledge is reused, and new knowledge recorded");
     const dead = rows.find((r) => r.normalizedEmail === DEAD_DOMAIN);
-    // Deliberately not asserting a final status: under all_except_valid an
-    // invalid verdict is parked for a second opinion rather than settled,
-    // so "no verdict yet" is correct here. What must hold is that it was
-    // recognised without a fresh provider call, and never called valid.
+    // A domain with no MX is conclusive, so it settles on the cheap pass
+    // rather than being parked for a paid second opinion.
     check(
-      dead?.finalStatus !== "valid",
-      `a domain with no MX is never treated as valid (got "${dead?.finalStatus}")`
+      dead?.finalStatus === "invalid",
+      `a domain with no MX settles as invalid, unpaid (got "${dead?.finalStatus}")`
     );
     check(
       !!dead?.mtnMessage,
       `a reason was recorded for it (got "${dead?.mtnMessage}")`
+    );
+    check(
+      fresh?.finalStatus === "invalid",
+      `a rejected mailbox settles as invalid, unpaid (got "${fresh?.finalStatus}")`
     );
 
     // The fresh call above should have taught the cache something. Without
@@ -132,7 +140,7 @@ async function main() {
     });
     check(
       (spend._sum.amount ?? 0) === 0,
-      `no credits spent reaching the review gate (spent ${spend._sum.amount ?? 0})`
+      `nothing MTN answered definitively was re-bought (spent ${spend._sum.amount ?? 0})`
     );
   } finally {
     console.log("\n6. Cleanup");

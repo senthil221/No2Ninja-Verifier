@@ -8,8 +8,7 @@ export const dynamic = "force-dynamic";
 const ACTIVE_LABEL: Record<string, string> = {
   pending: "Awaiting start",
   running_mtn: "Ninja pass",
-  running_n2b: "NeverBounce pass",
-  needs_approval: "Needs your decision",
+  running_n2b: "No2Bounce pass",
   failed: "Stopped",
 };
 
@@ -26,7 +25,7 @@ export default async function HomePage() {
     // Anything in flight or waiting on a person -- with several lists running
     // at once, this is the only place that shows them together.
     prisma.list.findMany({
-      where: { status: { in: ["pending", "running_mtn", "running_n2b", "needs_approval", "failed"] } },
+      where: { status: { in: ["pending", "running_mtn", "running_n2b", "failed"] } },
       include: { client: true },
       orderBy: { createdAt: "desc" },
       take: 12,
@@ -38,8 +37,8 @@ export default async function HomePage() {
       <span className="eyebrow">Overview</span>
       <h1>Clients</h1>
       <p className="subtitle">
-        Upload prospect lists per client. Each list runs Mail Tester Ninja first, then only the
-        undeliverable remainder goes to NeverBounce.
+        Upload prospect lists per client. Each list runs Mail Tester Ninja first, then only what
+        it could not answer goes to No2Bounce.
       </p>
 
       <div className="card">

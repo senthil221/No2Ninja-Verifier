@@ -46,8 +46,7 @@ export default async function UsagePage() {
       <span className="eyebrow">{isAdmin ? "All users" : "Your usage"}</span>
       <h1>Credit usage</h1>
       <p className="subtitle">
-        NeverBounce is the only paid step. Spend is recorded against whoever approved it at the
-        review gate.
+        No2Bounce is the only paid step. Spend is recorded against whoever started the run.
       </p>
 
       <div className="card">
@@ -142,7 +141,7 @@ export default async function UsagePage() {
             <thead>
               <tr>
                 <th>List</th>
-                {isAdmin && <th>Approved by</th>}
+                {isAdmin && <th>Started by</th>}
                 <th className="right">Credits</th>
                 <th className="right">When</th>
               </tr>

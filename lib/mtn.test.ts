@@ -14,11 +14,16 @@ test("classifies the code/message pairs the live API actually returns", () => {
 });
 
 test("the code decides, even for message wording we have never seen", () => {
-  // "Limited" is documented but unobserved. Whatever it means, the code is
-  // the provider's own verdict and must win.
-  assert.equal(classifyMtnResult("ok", "Limited"), "valid");
-  assert.equal(classifyMtnResult("mb", "Limited"), "transient");
   assert.equal(classifyMtnResult("ko", "Some Future Wording"), "invalid");
+  assert.equal(classifyMtnResult("ok", "Some Future Wording"), "valid");
+});
+
+test("'Limited' outranks the code and is never called valid", () => {
+  // The one message that overrides its own code. MTN pairs "Limited" with
+  // `ok`, but a limited answer is the server declining to complete the
+  // check -- it belongs in the paid pass, not in a send list.
+  assert.equal(classifyMtnResult("ok", "Limited"), "transient");
+  assert.equal(classifyMtnResult("mb", "Limited"), "transient");
 });
 
 test("an unverifiable code never resolves the address either way", () => {
@@ -59,11 +64,7 @@ test("classifies definitive results without escalating", () => {
 });
 
 test("message-only 'Limited' is not asserted valid", () => {
-  // Documented but never observed, so we don't know which code accompanies
-  // it. Without the code, claiming deliverability we can't back would send
-  // mail to an unverified address -- a bounce costs sender reputation,
-  // escalating costs a credit. With a code present, the code decides.
-  assert.notEqual(classifyMtnMessage("Limited"), "valid");
+  assert.equal(classifyMtnMessage("Limited"), "transient");
 });
 
 test("classifies catch-all as ambiguous", () => {

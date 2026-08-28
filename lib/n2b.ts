@@ -51,12 +51,12 @@ export class N2bClient {
       body: JSON.stringify({ emailList: emails }),
     });
     if (!res.ok) {
-      throw new Error(await describeError(res, "NeverBounce rejected the batch"));
+      throw new Error(await describeError(res, "No2Bounce rejected the batch"));
     }
     const json = (await res.json()) as { data?: { trackingId?: number | string } };
     const trackingId = json.data?.trackingId;
     if (trackingId === undefined || trackingId === null) {
-      throw new Error("NeverBounce accepted the batch but returned no trackingId");
+      throw new Error("No2Bounce accepted the batch but returned no trackingId");
     }
     return { trackingId: String(trackingId) };
   }
@@ -71,7 +71,7 @@ export class N2bClient {
     if (!res.ok) {
       // An unknown trackingId reports itself as an invalid API key, so say
       // so rather than sending someone off to regenerate a working token.
-      const detail = await describeError(res, "NeverBounce poll failed");
+      const detail = await describeError(res, "No2Bounce poll failed");
       return {
         state: "failed",
         error: `${detail} (note: this endpoint reports an unknown trackingId as an invalid key)`,
@@ -102,7 +102,7 @@ export class N2bClient {
   async fetchResultFile(fileUrl: string): Promise<N2bRowResult[]> {
     const res = await fetch(fileUrl);
     if (!res.ok) {
-      throw new Error(`Failed to download NeverBounce results: HTTP ${res.status}`);
+      throw new Error(`Failed to download No2Bounce results: HTTP ${res.status}`);
     }
     const text = await res.text();
 
@@ -180,23 +180,46 @@ function parseJsonRow(row: unknown): N2bRowResult {
   };
 }
 
-// Maps NeverBounce's vocabulary onto ours. Their categories separate
-// accept-all (catch-all) domains from confirmed results, and an accept-all
-// "deliverable" is not the same promise as a confirmed deliverable -- it is
-// the domain accepting everything -- so it lands as risky, not valid.
+// Maps No2Bounce's vocabulary onto ours.
+//
+// The report answers with one of: Deliverable, CatchAll/AcceptAll, Invalid,
+// Bounce or Spam -- on its own or combined, as in "Deliverable/AcceptAll".
+// Exactly one of those becomes "valid": a plain Deliverable, which is the
+// provider confirming the mailbox itself. Everything else is held back.
+//
+// The order below is the whole point, and each step is load-bearing:
+//
+//   1. Invalid / Bounce / UnDeliverable are conclusive whatever is combined
+//      with them. Also first because "UnDeliverable" literally contains
+//      "deliverable" -- checking valid earlier would call it deliverable.
+//   2. Accept-all and spam are disqualifiers, not verdicts on the mailbox.
+//      An accept-all Deliverable is the domain saying yes to every address,
+//      and a spam trap is deliverable in the literal sense and ruinous to
+//      send to. Both arrive combined with "Deliverable", so they have to be
+//      ruled out before it is honoured.
+//   3. Only then is a bare Deliverable read as valid.
 function mapN2bStatus(rawStatus: string): N2bRowResult["status"] {
   const s = rawStatus.toLowerCase().trim();
   if (!s) return "unknown";
 
-  if (s.includes("acceptall") || s.includes("accept all") || s.includes("catch")) {
-    if (s.includes("undeliverable") || s.includes("invalid")) return "invalid";
-    return "risky";
-  }
   if (s.includes("undeliverable") || s.includes("invalid") || s.includes("bounce")) {
     return "invalid";
   }
+
+  if (
+    s.includes("acceptall") ||
+    s.includes("accept all") ||
+    s.includes("catch") ||
+    s.includes("spam") ||
+    s.includes("risky")
+  ) {
+    return "risky";
+  }
+
   if (s.includes("deliverable") || s === "valid" || s === "ok") return "valid";
-  if (s.includes("risky") || s.includes("spam") || s.includes("unknown")) return "risky";
+
+  // A verdict we do not recognise is never guessed into the send list.
+  if (s.includes("unknown")) return "risky";
   return "unknown";
 }
 

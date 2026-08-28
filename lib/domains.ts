@@ -28,7 +28,7 @@ export async function loadDomainFacts(domains: string[]): Promise<Map<string, Do
   });
 
   for (const row of rows) {
-    // Catch-all is established by NeverBounce, so reusing it avoids paying
+    // Catch-all is established by No2Bounce, so reusing it avoids paying
     // again -- worth doing, on the domain TTL.
     const catchAllUsable =
       row.isCatchAll === true &&

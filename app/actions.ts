@@ -5,7 +5,6 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import {
   ingestList,
-  approveN2bSubmission,
   retryList,
   deleteList,
   finishWithoutN2b,
@@ -60,17 +59,11 @@ export async function uploadList(clientId: string, formData: FormData) {
   redirect(`/clients/${clientId}`);
 }
 
-export async function approveList(listId: string) {
-  // Spending credits is the one irreversible action here, so it is recorded
-  // against whoever authorised it.
-  const user = await assertSignedIn();
-  await approveN2bSubmission(listId, user.id);
-  revalidatePath(`/lists/${listId}`);
-}
-
 export async function beginVerification(listId: string) {
-  await assertSignedIn();
-  await startVerification(listId);
+  // Starting the run is what authorises the credits it may go on to spend,
+  // so it is recorded against whoever clicked it.
+  const user = await assertSignedIn();
+  await startVerification(listId, user.id);
   revalidatePath(`/lists/${listId}`);
 }
 

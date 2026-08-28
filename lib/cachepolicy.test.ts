@@ -9,7 +9,7 @@ import { config } from "./config";
 //   roles, mailboxes close, and a months-old "Accepted" becomes a bounce
 //   that costs sender reputation.
 //
-//   NeverBounce costs a credit per address. Not reusing a verdict means
+//   No2Bounce costs a credit per address. Not reusing a verdict means
 //   paying again for an answer already bought.
 //
 // Getting these the wrong way round is expensive in both directions, so the
@@ -26,7 +26,7 @@ test("free-provider results are not reused by default", () => {
 test("paid results are reused", () => {
   assert.ok(
     config.n2bCacheTtlDays > 0,
-    "NeverBounce verdicts must be reusable, or every list re-buys answers already paid for"
+    "No2Bounce verdicts must be reusable, or every list re-buys answers already paid for"
   );
 });
 
