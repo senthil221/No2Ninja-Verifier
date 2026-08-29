@@ -81,72 +81,96 @@ async function main() {
     check(list.skippedInvalid === 1, `1 malformed address skipped (got ${list.skippedInvalid})`);
     check(list.skippedDupes === 1, `1 duplicate skipped (got ${list.skippedDupes})`);
 
-    console.log("\n2. The provider is reachable and classified correctly");
     // Called directly rather than through the queue -- see the file header.
-    // This is the exact call the worker makes for every row. MTN itself is
+    // Retried locally on a transient-looking reply: MTN itself is
     // occasionally flaky in ways the pipeline now auto-retries in
-    // production (an intermittent "Disabled Key" that clears on its own) --
-    // a smoke test with less tolerance than production would fail on
+    // production (an intermittent "Disabled Key" that clears on its own),
+    // and a smoke test with less tolerance than production would fail on
     // exactly the blip the system is designed to shrug off.
-    let liveResult = await mtnClient.verify(UNIQUE_MISS);
-    let outcome = classifyMtnResult(liveResult.code, liveResult.message);
-    for (let attempt = 1; attempt < 3 && (outcome === "transient" || outcome === "fatal"); attempt++) {
-      console.log(`  retrying after a transient-looking reply: "${liveResult.message}"`);
-      await new Promise((r) => setTimeout(r, 2000));
-      liveResult = await mtnClient.verify(UNIQUE_MISS);
-      outcome = classifyMtnResult(liveResult.code, liveResult.message);
+    async function verifyLive(email: string) {
+      let result = await mtnClient.verify(email);
+      let outcome = classifyMtnResult(result.code, result.message);
+      for (let attempt = 1; attempt < 3 && (outcome === "transient" || outcome === "fatal"); attempt++) {
+        console.log(`  retrying after a transient-looking reply: "${result.message}"`);
+        await new Promise((r) => setTimeout(r, 2000));
+        result = await mtnClient.verify(email);
+        outcome = classifyMtnResult(result.code, result.message);
+      }
+      return { result, outcome };
     }
-    check(
-      ["ok", "ko", "mb"].includes(liveResult.code),
-      `got a real provider code (got "${liveResult.code}" / "${liveResult.message}")`
-    );
-    check(
-      liveResult.message.toLowerCase() === "rejected",
-      `a nonexistent Gmail mailbox is rejected (got "${liveResult.message}")`
-    );
-    check(outcome === "invalid", `classified as invalid (got "${outcome}")`);
 
-    console.log("\n3. That result flows through the same code the worker runs");
-    const freshRow = await prisma.listRow.findFirstOrThrow({
-      where: { listId: list.id, normalizedEmail: UNIQUE_MISS },
-    });
-    if (outcome === "valid" || outcome === "invalid" || outcome === "ambiguous") {
+    console.log("\n2. The provider is reachable and classified correctly");
+    const fresh = await verifyLive(UNIQUE_MISS);
+    check(
+      ["ok", "ko", "mb"].includes(fresh.result.code),
+      `got a real provider code (got "${fresh.result.code}" / "${fresh.result.message}")`
+    );
+    check(
+      fresh.result.message.toLowerCase() === "rejected",
+      `a nonexistent Gmail mailbox is rejected (got "${fresh.result.message}")`
+    );
+    check(fresh.outcome === "invalid", `classified as invalid (got "${fresh.outcome}")`);
+
+    // MTN-sourced facts are not reused by default (MTN_CACHE_TTL_DAYS=0 --
+    // see lib/config.ts), so a domain with no MX gets a fresh call too, not
+    // a cache hit. That is current, deliberate policy, not a shortcut this
+    // test is allowed to assume around.
+    const dead = await verifyLive(DEAD_DOMAIN);
+    check(dead.outcome === "invalid", `a domain with no MX is classified invalid (got "${dead.outcome}")`);
+
+    console.log("\n3. Both results flow through the same code the worker runs");
+    const rowByEmail = new Map(
+      (await prisma.listRow.findMany({ where: { listId: list.id } })).map((r) => [
+        r.normalizedEmail,
+        r,
+      ])
+    );
+    for (const [email, { result, outcome }] of [
+      [UNIQUE_MISS, fresh],
+      [DEAD_DOMAIN, dead],
+    ] as const) {
+      if (outcome !== "valid" && outcome !== "invalid" && outcome !== "ambiguous") continue;
+      const row = rowByEmail.get(email);
+      if (!row) continue;
       await recordMtnResult({
-        listRowId: freshRow.id,
+        listRowId: row.id,
         listId: list.id,
-        normalizedEmail: UNIQUE_MISS,
-        mtnStatus: liveResult.code,
-        mtnMessage: liveResult.message,
+        normalizedEmail: email,
+        mtnStatus: result.code,
+        mtnMessage: result.message,
         outcome,
       });
     }
 
     const rows = await prisma.listRow.findMany({ where: { listId: list.id } });
-    const fresh = rows.find((r) => r.normalizedEmail === UNIQUE_MISS);
-    const dead = rows.find((r) => r.normalizedEmail === DEAD_DOMAIN);
+    const freshRow = rows.find((r) => r.normalizedEmail === UNIQUE_MISS);
+    const deadRow = rows.find((r) => r.normalizedEmail === DEAD_DOMAIN);
 
     check(
-      fresh?.finalStatus === "invalid",
-      `rejected mailbox settles as invalid, unpaid (got "${fresh?.finalStatus}")`
+      freshRow?.finalStatus === "invalid",
+      `rejected mailbox settles as invalid, unpaid (got "${freshRow?.finalStatus}")`
+    );
+    check(
+      deadRow?.finalStatus === "invalid",
+      `no-MX domain settles as invalid, unpaid (got "${deadRow?.finalStatus}")`
     );
 
-    console.log("\n4. Domain-level facts resolve for free, without a live call");
-    // The dead domain was resolved by ingestList's own domain-fact pass,
-    // before this script ever called the provider -- proving that path
-    // works independently of the live call above.
+    console.log("\n4. Domain facts are recorded from what was just learned");
+    // Without this, domain facts could silently stop being recorded and the
+    // only symptom in production would be a slowly rising credit bill.
+    const [gmailFact, deadDomainFact] = await Promise.all([
+      prisma.domainCache.findUnique({ where: { domain: "gmail.com" } }),
+      prisma.domainCache.findUnique({
+        where: { domain: DEAD_DOMAIN.split("@")[1]! },
+      }),
+    ]);
     check(
-      dead?.finalStatus !== "valid",
-      `a domain with no MX is never treated as valid (got "${dead?.finalStatus}")`
+      gmailFact?.hasNoMx === false,
+      `gmail.com recorded as having mail exchange (hasNoMx=${gmailFact?.hasNoMx})`
     );
-    check(!!dead?.mtnMessage, `a reason was recorded for it (got "${dead?.mtnMessage}")`);
-
-    // The live call above should have taught the cache something. Without
-    // this, domain facts could silently stop being recorded and the only
-    // symptom would be a slowly rising credit bill.
-    const learned = await prisma.domainCache.findUnique({ where: { domain: "gmail.com" } });
     check(
-      learned?.hasNoMx === false,
-      `domain facts recorded from the live call (gmail.com hasNoMx=${learned?.hasNoMx})`
+      deadDomainFact?.hasNoMx === true,
+      `the dead domain recorded as having none (hasNoMx=${deadDomainFact?.hasNoMx})`
     );
 
     console.log("\n5. Nothing was charged");
