@@ -148,11 +148,7 @@ export async function ingestList(params: {
 // Begins the cheap pass for a list sitting at the pre-flight summary. This
 // is the last point at which a person is asked anything: from here the list
 // runs through Mail Tester Ninja and straight on to No2Bounce.
-export async function startVerification(
-  listId: string,
-  startedById?: string,
-  opts: { priority?: number } = {}
-) {
+export async function startVerification(listId: string, startedById?: string) {
   const list = await prisma.list.findUnique({
     where: { id: listId },
     select: { status: true },
@@ -166,7 +162,7 @@ export async function startVerification(
     await prisma.list.update({ where: { id: listId }, data: { startedById } });
   }
 
-  await enqueuePendingRows(listId, opts);
+  await enqueuePendingRows(listId);
 }
 
 const CACHE_HIT_MAP: Record<string, FinalStatus> = {
@@ -280,7 +276,7 @@ async function resolveFromDomainFacts(
   return resolved;
 }
 
-async function enqueuePendingRows(listId: string, opts: { priority?: number } = {}) {
+async function enqueuePendingRows(listId: string) {
   const pending = await prisma.listRow.findMany({
     where: { listId, stage: "pending" },
     select: { id: true, normalizedEmail: true },
@@ -306,11 +302,6 @@ async function enqueuePendingRows(listId: string, opts: { priority?: number } = 
         backoff: { type: "exponential", delay: 2000 },
         removeOnComplete: true,
         removeOnFail: true,
-        // Unset for every real list, so production ordering is untouched.
-        // The smoke test opts in to jump a real, possibly deep production
-        // backlog rather than waiting behind it or needing an unrealistic
-        // timeout.
-        ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
       },
     }))
   );
