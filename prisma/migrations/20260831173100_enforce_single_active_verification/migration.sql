@@ -2,6 +2,8 @@
 -- is demonstrably making progress (or an N2B list already in its paid pass)
 -- and place every other active list into the FIFO queue before adding the
 -- invariant. This makes the migration safe on an already-busy production DB.
+BEGIN;
+
 LOCK TABLE "List" IN SHARE ROW EXCLUSIVE MODE;
 
 WITH ranked_active AS (
@@ -30,3 +32,5 @@ WHERE l.id = ranked.id AND ranked.position > 1;
 CREATE UNIQUE INDEX "List_one_active_verification_idx"
 ON "List" ((1))
 WHERE status IN ('running_mtn', 'running_n2b');
+
+COMMIT;
