@@ -48,9 +48,13 @@ export const config = {
     rateLimitWindowMs: int("MTN_RATE_LIMIT_WINDOW_MS", 10_000),
     maxRetries: int("MTN_MAX_RETRIES", 3),
     // How many checks may be in flight at once. Starts are paced (see
-    // requestIntervalMs), so this only decides how much latency can be
-    // absorbed -- it does not create bursts.
-    concurrency: int("MTN_CONCURRENCY", 8),
+    // requestIntervalMs), so this only decides how much provider/SMTP latency
+    // can be absorbed -- it does not create bursts. MTN probes can take tens
+    // of seconds; eight slots left most of the safe 57/10s allowance idle.
+    concurrency: int("MTN_CONCURRENCY", 128),
+    // A remote mail server must not hold a worker slot forever. This is long
+    // enough for a real SMTP probe, while still guaranteeing eventual retry.
+    requestTimeoutMs: int("MTN_REQUEST_TIMEOUT_MS", 90_000),
     // Multiplier on the plan's own interval. A window-based limit permits
     // the whole allowance to fire at once, which reads as a burst and earns
     // a 429 even while the per-window total is legal; pacing every request

@@ -126,7 +126,10 @@ export class MtnClient {
     url.searchParams.set("email", email);
     url.searchParams.set("key", config.mtn.apiKey);
 
-    const res = await fetch(url.toString(), { method: "GET" });
+    const res = await fetch(url.toString(), {
+      method: "GET",
+      signal: AbortSignal.timeout(config.mtn.requestTimeoutMs),
+    });
 
     if (res.status === 429) {
       // Honour Retry-After when offered; otherwise wait out a full window,

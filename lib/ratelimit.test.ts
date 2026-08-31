@@ -61,3 +61,12 @@ test("paced interval stays under the plan's own rate", () => {
   // Pacing that drifts far below the allowance would be needlessly slow.
   assert.ok(perWindow > config.mtn.rateLimitMax * 0.7, "pacing should still use most of the allowance");
 });
+
+test("concurrency absorbs slow probes without changing the paced start rate", () => {
+  // MTN performs remote SMTP work, so replies can take tens of seconds. The
+  // worker needs many in-flight slots to keep starting at its safe paced
+  // rate; the limiter above, not this number, remains the provider boundary.
+  assert.ok(config.mtn.concurrency >= 64);
+  assert.ok(config.mtn.requestTimeoutMs >= 30_000);
+  assert.ok(config.mtn.requestTimeoutMs <= 120_000);
+});
