@@ -9,7 +9,10 @@ import { isRetryableFailure, autoRetryDelayMs } from "./retry-policy";
 import { domainOf, loadDomainFacts, recordDomainFact, verdictFromDomain } from "./domains";
 import type { FinalStatus, ResultSource } from "@prisma/client";
 import { mtnJobId } from "./mtn-queue-policy";
-import { ACTIVE_VERIFICATION_STATUSES } from "./list-scheduler-policy";
+import {
+  ACTIVE_VERIFICATION_STATUSES,
+  VERIFICATION_SCHEDULER_LOCK_SQL,
+} from "./list-scheduler-policy";
 
 // Serialises every attempt to acquire the one global verification slot,
 // including attempts arriving in different Next.js/worker processes. The
@@ -20,7 +23,10 @@ const VERIFICATION_SCHEDULER_LOCK = 2_026_08_31;
 
 async function claimNextQueuedList(): Promise<string | null> {
   return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(${VERIFICATION_SCHEDULER_LOCK})`;
+    await tx.$queryRawUnsafe<Array<{ lockResult: string }>>(
+      VERIFICATION_SCHEDULER_LOCK_SQL,
+      VERIFICATION_SCHEDULER_LOCK
+    );
 
     const active = await tx.list.count({
       where: { status: { in: [...ACTIVE_VERIFICATION_STATUSES] } },

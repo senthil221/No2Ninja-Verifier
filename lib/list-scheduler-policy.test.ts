@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ACTIVE_VERIFICATION_STATUSES,
+  VERIFICATION_SCHEDULER_LOCK_SQL,
   isActiveVerificationStatus,
   shouldPollListStatus,
 } from "./list-scheduler-policy";
+
+test("the advisory lock query returns a Prisma-supported scalar", () => {
+  assert.match(VERIFICATION_SCHEDULER_LOCK_SQL, /pg_advisory_xact_lock\(\$1\)::text/);
+  assert.match(VERIFICATION_SCHEDULER_LOCK_SQL, /AS "lockResult"/);
+});
 
 test("only one of the two provider phases owns the verification slot", () => {
   assert.deepEqual(ACTIVE_VERIFICATION_STATUSES, ["running_mtn", "running_n2b"]);
