@@ -725,7 +725,28 @@ a > button {
 }
 
 .running-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s2);
   margin-bottom: var(--s3);
+}
+
+.queue-focus-note,
+.action-notice,
+.action-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.action-notice {
+  color: var(--valid);
+  font-size: 12px;
+}
+
+.action-error {
+  color: var(--invalid);
+  font-size: 12px;
 }
 
 /* ---------- Action panels ---------- */

@@ -8,6 +8,7 @@ import { sendAlert } from "./alerts";
 import { isRetryableFailure, autoRetryDelayMs } from "./retry-policy";
 import { domainOf, loadDomainFacts, recordDomainFact, verdictFromDomain } from "./domains";
 import type { FinalStatus, ResultSource } from "@prisma/client";
+import { mtnFocusBlockReason, mtnJobId } from "./mtn-queue-policy";
 
 // ---------- Terminal state transitions ----------
 //
@@ -276,7 +277,7 @@ async function resolveFromDomainFacts(
   return resolved;
 }
 
-async function enqueuePendingRows(listId: string) {
+async function enqueuePendingRows(listId: string): Promise<number> {
   const pending = await prisma.listRow.findMany({
     where: { listId, stage: "pending" },
     select: { id: true, normalizedEmail: true },
@@ -288,7 +289,7 @@ async function enqueuePendingRows(listId: string) {
     // normal finalize path rather than calling it done.
     await prisma.list.update({ where: { id: listId }, data: { status: "running_mtn" } });
     await maybeFinalizeMtnPass(listId);
-    return;
+    return 0;
   }
 
   await prisma.list.update({ where: { id: listId }, data: { status: "running_mtn" } });
@@ -298,6 +299,7 @@ async function enqueuePendingRows(listId: string) {
       name: "verify",
       data: { listRowId: row.id, listId, email: row.normalizedEmail },
       opts: {
+        jobId: mtnJobId(row.id),
         attempts: config.mtn.maxRetries,
         backoff: { type: "exponential", delay: 2000 },
         removeOnComplete: true,
@@ -305,6 +307,56 @@ async function enqueuePendingRows(listId: string) {
       },
     }))
   );
+
+  // If every bulk entry was already present, BullMQ may not recreate the
+  // marker that wakes a blocked worker. A no-op job always supplies one and
+  // is discarded before the provider call in worker/index.ts.
+  await mtnQueue.add(
+    "wake",
+    { listRowId: "", listId, email: "" },
+    {
+      jobId: `wake-${listId}-${Date.now()}`,
+      removeOnComplete: true,
+      removeOnFail: true,
+    }
+  );
+
+  return pending.length;
+}
+
+export interface FocusMtnResult {
+  ok: boolean;
+  queued: number;
+  message: string;
+}
+
+// Rebuilds MTN's waiting set around one list without ever relaxing the
+// worker's global provider limiter. This is deliberately restricted to the
+// sole running MTN list: drain() removes queue-wide waiting/delayed work, so
+// allowing it while another list runs would silently discard that work.
+export async function focusMtnList(listId: string): Promise<FocusMtnResult> {
+  const [target, otherRunningMtnLists] = await Promise.all([
+    prisma.list.findUnique({ where: { id: listId }, select: { status: true } }),
+    prisma.list.count({ where: { id: { not: listId }, status: "running_mtn" } }),
+  ]);
+
+  const blocked = mtnFocusBlockReason(target?.status, otherRunningMtnLists);
+  if (blocked) return { ok: false, queued: 0, message: blocked };
+
+  // BullMQ documents drain(true) as removing waiting and delayed jobs while
+  // leaving active work alone. At most the current concurrency can finish
+  // during this rebuild; the row-stage guard makes any duplicate harmless.
+  await mtnQueue.drain(true);
+  const queued = await enqueuePendingRows(listId);
+
+  return {
+    ok: true,
+    queued,
+    message:
+      queued > 0
+        ? `MTN queue rebuilt from ${queued} unresolved ${queued === 1 ? "row" : "rows"}. The global safety limit is still active.`
+        : "No unresolved MTN rows remain; the pipeline is moving to its next stage.",
+  };
 }
 
 // Rows waiting on N2B were parked there by whatever classification rules

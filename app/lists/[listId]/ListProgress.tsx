@@ -5,6 +5,7 @@ import {
   retryFailedList,
   finishListWithoutN2b,
   beginVerification,
+  forceMtnVerification,
   stopVerification,
 } from "@/app/actions";
 
@@ -196,6 +197,8 @@ function ExportMenu({
 export default function ListProgress({ listId }: { listId: string }) {
   const [data, setData] = useState<StatusPayload | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   // Bumped after every action so the poll loop restarts immediately rather
   // than waiting for a manual refresh.
   const [tick, setTick] = useState(0);
@@ -231,8 +234,12 @@ export default function ListProgress({ listId }: { listId: string }) {
   // Every action runs through here so none can forget to resume polling.
   const run = useCallback(async (key: string, action: () => Promise<void>) => {
     setBusy(key);
+    setActionNotice(null);
+    setActionError(null);
     try {
       await action();
+    } catch {
+      setActionError("The action could not be completed. Refresh the page and try again.");
     } finally {
       setBusy(null);
       setTick((t) => t + 1);
@@ -347,6 +354,19 @@ export default function ListProgress({ listId }: { listId: string }) {
 
           {running && (
             <div className="running-actions">
+              {data.status === "running_mtn" && (
+                <button
+                  disabled={busy !== null}
+                  onClick={() =>
+                    run("focus", async () => {
+                      const result = await forceMtnVerification(listId);
+                      result.ok ? setActionNotice(result.message) : setActionError(result.message);
+                    })
+                  }
+                >
+                  {busy === "focus" ? "Rebuilding MTN queue…" : "Force MTN on this list"}
+                </button>
+              )}
               <button
                 className="btn-quiet"
                 disabled={busy !== null}
@@ -354,6 +374,22 @@ export default function ListProgress({ listId }: { listId: string }) {
               >
                 {busy === "stop" ? "Stopping…" : "Stop verification"}
               </button>
+              {data.status === "running_mtn" && (
+                <p className="meta queue-focus-note">
+                  Dedicates the safe MTN queue to this list when it is the only MTN run. The
+                  global provider rate limit stays on.
+                </p>
+              )}
+              {actionNotice && (
+                <p className="action-notice" role="status">
+                  {actionNotice}
+                </p>
+              )}
+              {actionError && (
+                <p className="action-error" role="alert">
+                  {actionError}
+                </p>
+              )}
             </div>
           )}
 

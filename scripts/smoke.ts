@@ -33,6 +33,7 @@ import { prisma } from "../lib/prisma";
 import { ingestList, recordMtnResult, deleteList } from "../lib/pipeline";
 import { mtnClient, classifyMtnResult } from "../lib/mtn";
 import { assertProviderKeysConfigured } from "../lib/config";
+import { redisConnection } from "../lib/queue";
 
 const CLIENT_NAME = "__smoke_test__";
 
@@ -214,4 +215,9 @@ main()
     console.error("\nSMOKE TEST ERRORED:", err);
     process.exit(1);
   })
-  .finally(() => prisma.$disconnect());
+  .finally(async () => {
+    // Importing pipeline creates BullMQ's Redis connection. Close it as well
+    // as Prisma so repeated deploy smoke tests do not leave orphaned Node
+    // processes inside the worker container.
+    await Promise.allSettled([prisma.$disconnect(), redisConnection.quit()]);
+  });

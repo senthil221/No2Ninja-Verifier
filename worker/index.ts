@@ -15,9 +15,9 @@ import {
   recordMtnUnreachable,
   pollN2bBatchOnce,
   failListFromMtn,
-  isListInactive,
   retryList,
 } from "../lib/pipeline";
+import { shouldProcessMtnJob } from "../lib/mtn-queue-policy";
 
 assertProviderKeysConfigured();
 
@@ -45,10 +45,16 @@ const mtnWorker: Worker<MtnVerifyJobData> = new Worker<MtnVerifyJobData>(
   async (job: Job<MtnVerifyJobData>) => {
     const { listRowId, listId, email } = job.data;
 
-    // A stopped or deleted list keeps receiving the jobs already queued for
-    // it. Drop them rather than hammering a known-bad key thousands of
-    // times, or writing rows back to a list that no longer exists.
-    if (await isListInactive(listId)) return;
+    // A focus/retry can leave a handful of historical jobs active while the
+    // waiting backlog is rebuilt. Verify the row as well as the list so a
+    // duplicate for an already-resolved address never consumes MTN capacity.
+    // Wake jobs exist only to restore BullMQ's queue marker and stop here too.
+    if (job.name === "wake") return;
+    const row = await prisma.listRow.findUnique({
+      where: { id: listRowId },
+      select: { stage: true, list: { select: { status: true } } },
+    });
+    if (!row || !shouldProcessMtnJob(row.list.status, row.stage)) return;
 
     let result;
     try {

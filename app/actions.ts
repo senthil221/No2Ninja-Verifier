@@ -8,6 +8,7 @@ import {
   retryList,
   deleteList,
   finishWithoutN2b,
+  focusMtnList,
   startVerification,
   stopList,
 } from "@/lib/pipeline";
@@ -77,6 +78,13 @@ export async function stopVerification(listId: string) {
   await assertSignedIn();
   await stopList(listId);
   revalidatePath(`/lists/${listId}`);
+}
+
+export async function forceMtnVerification(listId: string) {
+  await assertSignedIn();
+  const result = await focusMtnList(listId);
+  revalidatePath(`/lists/${listId}`);
+  return result;
 }
 
 export async function retryFailedList(listId: string) {
