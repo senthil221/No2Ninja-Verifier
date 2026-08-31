@@ -453,6 +453,7 @@ a > button {
 }
 
 .pill-pending,
+.pill-queued,
 .pill-running_mtn,
 .pill-running_n2b {
   background: var(--risky-soft);
@@ -732,16 +733,9 @@ a > button {
   margin-bottom: var(--s3);
 }
 
-.queue-focus-note,
-.action-notice,
 .action-error {
   flex-basis: 100%;
   margin: 0;
-}
-
-.action-notice {
-  color: var(--valid);
-  font-size: 12px;
 }
 
 .action-error {

@@ -14,19 +14,7 @@ export function shouldProcessMtnJob(
 ): boolean {
   // A queued job is only useful while both the list and row still expect an
   // MTN answer. This makes historical duplicate jobs harmless: they are
-  // discarded without consuming a provider request or a rate-limit slot.
+  // discarded without consuming a provider request; scheduler reconciliation
+  // drains them so they do not waste paced worker starts either.
   return listStatus === "running_mtn" && rowStage === "pending";
-}
-
-export function mtnFocusBlockReason(
-  targetStatus: string | null | undefined,
-  otherRunningMtnLists: number
-): string | null {
-  if (targetStatus !== "running_mtn") {
-    return "This list is not currently in the Mail Tester Ninja stage.";
-  }
-  if (otherRunningMtnLists > 0) {
-    return "Another list is also running Mail Tester Ninja. Stop it first so focusing this list cannot discard its queued work.";
-  }
-  return null;
 }

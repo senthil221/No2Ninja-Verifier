@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Ready to start",
+  queued: "Queued",
   running_mtn: "Running Ninja pass",
   running_n2b: "Running No2Bounce",
   completed: "Completed",
@@ -40,8 +41,8 @@ export default async function ClientPage({ params }: { params: { clientId: strin
             <label htmlFor="file">CSV files</label>
             <input type="file" id="file" name="file" accept=".csv" multiple required />
             <p className="meta">
-              Select several at once. Each becomes its own list, and they queue together sharing
-              the same rate limit.
+              Select several at once. Each becomes its own list; after you approve them, they run
+              one by one at the full safe provider rate.
             </p>
           </div>
           <div className="field">

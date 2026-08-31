@@ -8,7 +8,117 @@ import { sendAlert } from "./alerts";
 import { isRetryableFailure, autoRetryDelayMs } from "./retry-policy";
 import { domainOf, loadDomainFacts, recordDomainFact, verdictFromDomain } from "./domains";
 import type { FinalStatus, ResultSource } from "@prisma/client";
-import { mtnFocusBlockReason, mtnJobId } from "./mtn-queue-policy";
+import { mtnJobId } from "./mtn-queue-policy";
+import { ACTIVE_VERIFICATION_STATUSES } from "./list-scheduler-policy";
+
+// Serialises every attempt to acquire the one global verification slot,
+// including attempts arriving in different Next.js/worker processes. The
+// partial unique index in Postgres is the final invariant; this lock gives us
+// deterministic FIFO selection instead of turning a harmless race into an
+// index violation.
+const VERIFICATION_SCHEDULER_LOCK = 2_026_08_31;
+
+async function claimNextQueuedList(): Promise<string | null> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(${VERIFICATION_SCHEDULER_LOCK})`;
+
+    const active = await tx.list.count({
+      where: { status: { in: [...ACTIVE_VERIFICATION_STATUSES] } },
+    });
+    if (active > 0) return null;
+
+    const next = await tx.list.findFirst({
+      where: { status: "queued" },
+      orderBy: [{ queuedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: { id: true },
+    });
+    if (!next) return null;
+
+    const claimed = await tx.list.updateMany({
+      where: { id: next.id, status: "queued" },
+      data: { status: "running_mtn", queuedAt: null },
+    });
+    return claimed.count === 1 ? next.id : null;
+  });
+}
+
+async function resumeInFlightN2bBatch(listId: string): Promise<boolean> {
+  const batch = await prisma.n2bBatch.findFirst({
+    where: { listId, status: { in: ["submitted", "polling"] } },
+    orderBy: { submittedAt: "desc" },
+    select: { id: true },
+  });
+  if (!batch) return false;
+
+  await n2bPollQueue.add(
+    "poll",
+    { batchId: batch.id },
+    { delay: config.n2b.pollIntervalMs, removeOnComplete: true, removeOnFail: true }
+  );
+  return true;
+}
+
+// Starts the oldest approved list only when neither provider is handling a
+// different list. Waiting/delayed MTN work is rebuilt for the new owner so a
+// historical queue entry can never make another list consume the allowance.
+export async function dispatchNextQueuedList(): Promise<string | null> {
+  const [activeMtnJobs, activeN2bJobs] = await Promise.all([
+    mtnQueue.getActiveCount(),
+    n2bPollQueue.getActiveCount(),
+  ]);
+  if (activeMtnJobs + activeN2bJobs > 0) return null;
+
+  const listId = await claimNextQueuedList();
+  if (!listId) return null;
+
+  await Promise.all([mtnQueue.drain(true), n2bPollQueue.drain(true)]);
+  try {
+    await enqueuePendingRows(listId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await markFailed(listId, `Could not start the queued list (${message}).`, {
+      retryable: isRetryableFailure(err),
+    });
+  }
+  return listId;
+}
+
+// Worker startup is the recovery boundary for a process interruption between
+// the database claim and Redis enqueue. It also cleans queue entries left by
+// the older multi-list scheduler before resuming the single active owner.
+export async function recoverVerificationScheduler(): Promise<string | null> {
+  const active = await prisma.list.findFirst({
+    where: { status: { in: [...ACTIVE_VERIFICATION_STATUSES] } },
+    select: { id: true, status: true },
+  });
+
+  await Promise.all([mtnQueue.drain(true), n2bPollQueue.drain(true)]);
+  if (!active) return dispatchNextQueuedList();
+  if (active.status === "running_mtn") await enqueuePendingRows(active.id);
+  if (active.status === "running_n2b") await resumeInFlightN2bBatch(active.id);
+  return active.id;
+}
+
+async function continueQueueAfterRelease() {
+  try {
+    // Completing/deleting a non-owner (for example a queued list or the
+    // isolated smoke fixture) must never drain the real owner's jobs.
+    const activeOwners = await prisma.list.count({
+      where: { status: { in: [...ACTIVE_VERIFICATION_STATUSES] } },
+    });
+    if (activeOwners > 0) return;
+
+    // Waiting/delayed entries belong to the list that just released the
+    // slot. Active calls cannot be cancelled safely; dispatch waits for their
+    // completion event before promoting the next list.
+    await Promise.all([mtnQueue.drain(true), n2bPollQueue.drain(true)]);
+    await dispatchNextQueuedList();
+  } catch (err) {
+    // The list that just reached a durable terminal state must stay terminal
+    // even if Redis is briefly unavailable. Worker startup retries dispatch.
+    console.error("[pipeline] could not dispatch the next queued list", err);
+  }
+}
 
 // ---------- Terminal state transitions ----------
 //
@@ -52,6 +162,8 @@ async function markFailed(listId: string, error: string, opts: { retryable?: boo
   // A racing failure for the same list already handled this transition.
   if (transitioned.count === 0) return;
 
+  await continueQueueAfterRelease();
+
   if (willAutoRetry && delay !== null) {
     await listRetryQueue.add(
       "retry",
@@ -87,6 +199,7 @@ async function markCompleted(listId: string) {
     },
     include: { client: true },
   });
+  await continueQueueAfterRelease();
   const [valid, spend] = await Promise.all([
     prisma.listRow.count({ where: { listId, finalStatus: "valid" } }),
     prisma.creditLedger.aggregate({ _sum: { amount: true }, where: { listId, provider: "n2b" } }),
@@ -150,20 +263,22 @@ export async function ingestList(params: {
 // is the last point at which a person is asked anything: from here the list
 // runs through Mail Tester Ninja and straight on to No2Bounce.
 export async function startVerification(listId: string, startedById?: string) {
-  const list = await prisma.list.findUnique({
-    where: { id: listId },
-    select: { status: true },
-  });
-  if (!list || list.status !== "pending") return;
-
   // Batches are submitted later, asynchronously, by the worker -- which has
   // no session to ask. Record who authorised the run now, so every credit
-  // this list goes on to spend is attributable.
-  if (startedById) {
-    await prisma.list.update({ where: { id: listId }, data: { startedById } });
-  }
+  // this list goes on to spend is attributable. Every approved list enters
+  // the FIFO first; the dispatcher promotes exactly one when the global slot
+  // is free. updateMany makes a double click idempotent.
+  const queued = await prisma.list.updateMany({
+    where: { id: listId, status: "pending" },
+    data: {
+      status: "queued",
+      queuedAt: new Date(),
+      ...(startedById ? { startedById } : {}),
+    },
+  });
+  if (queued.count === 0) return;
 
-  await enqueuePendingRows(listId);
+  await dispatchNextQueuedList();
 }
 
 const CACHE_HIT_MAP: Record<string, FinalStatus> = {
@@ -324,41 +439,6 @@ async function enqueuePendingRows(listId: string): Promise<number> {
   return pending.length;
 }
 
-export interface FocusMtnResult {
-  ok: boolean;
-  queued: number;
-  message: string;
-}
-
-// Rebuilds MTN's waiting set around one list without ever relaxing the
-// worker's global provider limiter. This is deliberately restricted to the
-// sole running MTN list: drain() removes queue-wide waiting/delayed work, so
-// allowing it while another list runs would silently discard that work.
-export async function focusMtnList(listId: string): Promise<FocusMtnResult> {
-  const [target, otherRunningMtnLists] = await Promise.all([
-    prisma.list.findUnique({ where: { id: listId }, select: { status: true } }),
-    prisma.list.count({ where: { id: { not: listId }, status: "running_mtn" } }),
-  ]);
-
-  const blocked = mtnFocusBlockReason(target?.status, otherRunningMtnLists);
-  if (blocked) return { ok: false, queued: 0, message: blocked };
-
-  // BullMQ documents drain(true) as removing waiting and delayed jobs while
-  // leaving active work alone. At most the current concurrency can finish
-  // during this rebuild; the row-stage guard makes any duplicate harmless.
-  await mtnQueue.drain(true);
-  const queued = await enqueuePendingRows(listId);
-
-  return {
-    ok: true,
-    queued,
-    message:
-      queued > 0
-        ? `MTN queue rebuilt from ${queued} unresolved ${queued === 1 ? "row" : "rows"}. The global safety limit is still active.`
-        : "No unresolved MTN rows remain; the pipeline is moving to its next stage.",
-  };
-}
-
 // Rows waiting on N2B were parked there by whatever classification rules
 // were current when they ran. Re-apply today's rules to the MTN reply we
 // already stored: if MTN had in fact answered definitively (an earlier bug
@@ -398,6 +478,9 @@ async function reclassifyParkedRows(listId: string) {
 // since been fixed). Picks up from whatever stage each row actually reached,
 // so already-verified rows are never re-checked or re-paid for.
 export async function retryList(listId: string) {
+  const list = await prisma.list.findUnique({ where: { id: listId }, select: { status: true } });
+  if (!list || (list.status !== "failed" && list.status !== "stopped")) return;
+
   // nextAutoRetryAt is cleared because the retry is happening now, not
   // pending; autoRetryCount is left alone so the backoff schedule continues
   // from where it was if this attempt fails again too.
@@ -412,23 +495,21 @@ export async function retryList(listId: string) {
   await reclassifyParkedRows(listId);
 
   const stillPending = await prisma.listRow.count({ where: { listId, stage: "pending" } });
-  if (stillPending > 0) {
-    await enqueuePendingRows(listId);
-    return;
-  }
+  const needsN2b = await prisma.listRow.count({ where: { listId, stage: "needs_n2b" } });
 
-  const needsN2b = await prisma.listRow.findMany({
-    where: { listId, stage: "needs_n2b" },
-    select: { id: true, normalizedEmail: true, mtnMessage: true },
-  });
-
-  if (needsN2b.length === 0) {
+  if (stillPending === 0 && needsN2b === 0) {
     await markCompleted(listId);
     return;
   }
 
-  await prisma.list.update({ where: { id: listId }, data: { status: "running_n2b" } });
-  await submitN2bBatch(listId, needsN2b);
+  // A retry/resume is approved work just like a fresh Start. It rejoins the
+  // FIFO and cannot bypass whichever list currently owns the pipeline.
+  const requeued = await prisma.list.updateMany({
+    where: { id: listId, status: { in: ["failed", "stopped"] } },
+    data: { status: "queued", queuedAt: new Date() },
+  });
+  if (requeued.count === 0) return;
+  await dispatchNextQueuedList();
 }
 
 // ---------- MTN pass resolution ----------
@@ -529,17 +610,19 @@ export async function failListFromMtn(listId: string, mtnMessage: string) {
 // jobs should be dropped rather than processed.
 export async function isListInactive(listId: string) {
   const list = await prisma.list.findUnique({ where: { id: listId }, select: { status: true } });
-  return list === null || list.status === "failed" || list.status === "stopped";
+  return (
+    list === null || list.status === "queued" || list.status === "failed" || list.status === "stopped"
+  );
 }
 
-// Halts a running list. Queued work drains without being processed (see
-// isListInactive), so nothing further is checked or charged. Everything
-// already verified is kept, and resuming picks up from there.
+// Halts either the active list or an approved list waiting in the FIFO.
+// Everything already verified is kept, and resuming rejoins the queue.
 export async function stopList(listId: string) {
-  await prisma.list.updateMany({
-    where: { id: listId, status: { in: ["running_mtn", "running_n2b"] } },
+  const stopped = await prisma.list.updateMany({
+    where: { id: listId, status: { in: ["queued", "running_mtn", "running_n2b"] } },
     data: {
       status: "stopped",
+      queuedAt: null,
       lastError: "Stopped manually. Results so far are kept — resume to continue.",
       // A deliberate stop is not the auto-retry system's business -- clear
       // its bookkeeping so the UI does not suggest a retry is still pending.
@@ -550,6 +633,7 @@ export async function stopList(listId: string) {
       nextAutoRetryAt: null,
     },
   });
+  if (stopped.count > 0) await continueQueueAfterRelease();
 }
 
 // Removes the prospect data (the personal data, and the point of deleting)
@@ -558,6 +642,7 @@ export async function stopList(listId: string) {
 // harmlessly via isListInactive.
 export async function deleteList(listId: string) {
   await prisma.list.delete({ where: { id: listId } });
+  await continueQueueAfterRelease();
 }
 
 // MTN was never reached for this row (DNS, TLS, socket, timeout). Leave it
@@ -629,6 +714,11 @@ async function maybeFinalizeMtnPass(listId: string) {
 // the run was started, and the rows that reach this point are only the ones
 // MTN genuinely could not resolve.
 async function finalizeMtnPass(listId: string) {
+  // A list that was already in N2B when the serial scheduler was introduced
+  // may have been queued behind another active list. Resume its paid batch;
+  // never submit and charge for the same rows a second time.
+  if (await resumeInFlightN2bBatch(listId)) return;
+
   const needsN2b = await prisma.listRow.findMany({
     where: { listId, stage: "needs_n2b" },
     select: { id: true, normalizedEmail: true, mtnMessage: true },
@@ -781,7 +871,13 @@ async function submitN2bBatch(
 // ---------- N2B pass resolution ----------
 
 export async function pollN2bBatchOnce(batchId: string) {
-  const batch = await prisma.n2bBatch.findUniqueOrThrow({ where: { id: batchId } });
+  const batch = await prisma.n2bBatch.findUniqueOrThrow({
+    where: { id: batchId },
+    include: { list: { select: { status: true } } },
+  });
+  // Historical poll jobs for a queued/stopped/completed list are harmless.
+  // The scheduler re-adds the poll when that list owns the global slot.
+  if (batch.list.status !== "running_n2b") return;
 
   // poll() downloads the result file once the batch finishes, so it can fail
   // on the network too. Treat that like any other provider failure rather
@@ -812,6 +908,13 @@ export async function pollN2bBatchOnce(batchId: string) {
     await markFailed(batch.listId, result.error, { retryable: isRetryableFailure(result.error) });
     return;
   }
+
+  // Stop/failure can release the slot while this HTTP poll is in flight.
+  // Never apply that late reply to a list that no longer owns the pipeline.
+  const stillOwnsSlot = await prisma.list.count({
+    where: { id: batch.listId, status: "running_n2b" },
+  });
+  if (stillOwnsSlot === 0) return;
 
   await applyN2bResults(batch.listId, batchId, result.rows, undefined);
 }

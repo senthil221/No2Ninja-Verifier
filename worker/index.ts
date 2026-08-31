@@ -15,6 +15,8 @@ import {
   recordMtnUnreachable,
   pollN2bBatchOnce,
   failListFromMtn,
+  dispatchNextQueuedList,
+  recoverVerificationScheduler,
   retryList,
 } from "../lib/pipeline";
 import { shouldProcessMtnJob } from "../lib/mtn-queue-policy";
@@ -175,5 +177,35 @@ const listRetryWorker = new Worker<ListRetryJobData>(
 for (const worker of [mtnWorker, n2bPollWorker, listRetryWorker]) {
   worker.on("error", (err) => console.error(`[worker:${worker.name}] error`, err));
 }
+
+// A stop/failure may release the database slot while its last provider call
+// is still in flight. Once either provider worker becomes idle, give the FIFO
+// another chance to promote the next list.
+for (const worker of [mtnWorker, n2bPollWorker]) {
+  worker.on("completed", () => {
+    void dispatchNextQueuedList().catch((err) =>
+      console.error("[worker:scheduler] completion dispatch failed", err)
+    );
+  });
+}
+
+// Heals the narrow crash window after a durable terminal transition but
+// before its Redis dispatch. Normal promotion is event-driven; this is only
+// a low-frequency safety net.
+setInterval(() => {
+  void dispatchNextQueuedList().catch((err) =>
+    console.error("[worker:scheduler] heartbeat dispatch failed", err)
+  );
+}, 5000);
+
+void recoverVerificationScheduler()
+  .then((listId) =>
+    console.log(
+      listId
+        ? `[worker:scheduler] exclusive verification owner ${listId}`
+        : "[worker:scheduler] no approved list is waiting"
+    )
+  )
+  .catch((err) => console.error("[worker:scheduler] recovery failed", err));
 
 console.log("Waterfall Verifier worker started (mtn-verify, n2b-poll, list-retry queues).");

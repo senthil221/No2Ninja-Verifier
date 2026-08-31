@@ -5,9 +5,9 @@ import {
   retryFailedList,
   finishListWithoutN2b,
   beginVerification,
-  forceMtnVerification,
   stopVerification,
 } from "@/app/actions";
+import { shouldPollListStatus } from "@/lib/list-scheduler-policy";
 
 interface StatusPayload {
   status: string;
@@ -32,6 +32,10 @@ interface StatusPayload {
     knownFromCache: number;
     toVerify: number;
   };
+  queue: {
+    position: number;
+    activeList: { id: string; name: string; status: string } | null;
+  } | null;
   breakdown: {
     mtnMessage: string;
     stage: string;
@@ -39,20 +43,6 @@ interface StatusPayload {
     count: number;
     escalates: boolean;
   }[];
-}
-
-// Statuses where nothing moves without a person acting -- polling pauses
-// here to avoid pointless requests, and every action resumes it, which is
-// what previously left the page frozen after "Start verification" until
-// that was fixed. "failed" is the one exception: with an active auto-retry
-// it changes on its own, so polling has to keep going through it too.
-const AWAITING_ACTION = new Set(["pending", "failed", "stopped"]);
-const FINISHED = new Set(["completed"]);
-
-function shouldKeepPolling(status: string, autoRetry: StatusPayload["autoRetry"]): boolean {
-  if (FINISHED.has(status)) return false;
-  if (status === "failed" && autoRetry) return true;
-  return !AWAITING_ACTION.has(status);
 }
 
 const STATUS_COLOR_VAR: Record<string, string> = {
@@ -103,6 +93,8 @@ function stepIndexFor(status: string): number {
   switch (status) {
     case "pending":
       return 0;
+    case "queued":
+      return 1;
     case "running_mtn":
       return 1;
     case "running_n2b":
@@ -197,7 +189,6 @@ function ExportMenu({
 export default function ListProgress({ listId }: { listId: string }) {
   const [data, setData] = useState<StatusPayload | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   // Bumped after every action so the poll loop restarts immediately rather
   // than waiting for a manual refresh.
@@ -214,7 +205,7 @@ export default function ListProgress({ listId }: { listId: string }) {
         const json: StatusPayload = await res.json();
         if (cancelled) return;
         setData(json);
-        if (shouldKeepPolling(json.status, json.autoRetry)) {
+        if (shouldPollListStatus(json.status, Boolean(json.autoRetry))) {
           // A pending auto-retry can be minutes away; no need to hammer the
           // endpoint waiting for it the way active progress does.
           timer = setTimeout(poll, json.autoRetry ? 10_000 : 2000);
@@ -234,7 +225,6 @@ export default function ListProgress({ listId }: { listId: string }) {
   // Every action runs through here so none can forget to resume polling.
   const run = useCallback(async (key: string, action: () => Promise<void>) => {
     setBusy(key);
-    setActionNotice(null);
     setActionError(null);
     try {
       await action();
@@ -310,8 +300,35 @@ export default function ListProgress({ listId }: { listId: string }) {
         </div>
       )}
 
+      {data.status === "queued" && (
+        <div className="panel-action">
+          <h3 className="panel-title">
+            Queued for verification
+            {data.queue && <span className="num"> · position {data.queue.position}</span>}
+          </h3>
+          <p className="meta">
+            Only one list runs at a time, using the full safe provider allowance. This list starts
+            automatically when the current list completes.
+          </p>
+          {data.queue?.activeList && (
+            <p className="meta">
+              Currently running: <strong>{data.queue.activeList.name}</strong>
+            </p>
+          )}
+          <div className="review-actions">
+            <button
+              className="btn-quiet"
+              disabled={busy !== null}
+              onClick={() => run("stop", () => stopVerification(listId))}
+            >
+              {busy === "stop" ? "Removing…" : "Remove from queue"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ---------- Live progress ---------- */}
-      {data.status !== "pending" && (
+      {data.status !== "pending" && data.status !== "queued" && (
         <>
           <div className="progress-head">
             <span className="progress-count num">
@@ -354,19 +371,6 @@ export default function ListProgress({ listId }: { listId: string }) {
 
           {running && (
             <div className="running-actions">
-              {data.status === "running_mtn" && (
-                <button
-                  disabled={busy !== null}
-                  onClick={() =>
-                    run("focus", async () => {
-                      const result = await forceMtnVerification(listId);
-                      result.ok ? setActionNotice(result.message) : setActionError(result.message);
-                    })
-                  }
-                >
-                  {busy === "focus" ? "Rebuilding MTN queue…" : "Force MTN on this list"}
-                </button>
-              )}
               <button
                 className="btn-quiet"
                 disabled={busy !== null}
@@ -374,17 +378,6 @@ export default function ListProgress({ listId }: { listId: string }) {
               >
                 {busy === "stop" ? "Stopping…" : "Stop verification"}
               </button>
-              {data.status === "running_mtn" && (
-                <p className="meta queue-focus-note">
-                  Dedicates the safe MTN queue to this list when it is the only MTN run. The
-                  global provider rate limit stays on.
-                </p>
-              )}
-              {actionNotice && (
-                <p className="action-notice" role="status">
-                  {actionNotice}
-                </p>
-              )}
               {actionError && (
                 <p className="action-error" role="alert">
                   {actionError}

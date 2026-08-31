@@ -8,7 +8,6 @@ import {
   retryList,
   deleteList,
   finishWithoutN2b,
-  focusMtnList,
   startVerification,
   stopList,
 } from "@/lib/pipeline";
@@ -38,9 +37,7 @@ export async function uploadList(clientId: string, formData: FormData) {
   if (files.length === 0) throw new Error("At least one CSV file is required");
 
   // Each file becomes its own list so they can be reviewed and exported
-  // independently. They all draw on the same rate-limited queue, so
-  // uploading several at once is safe -- they interleave rather than
-  // competing.
+  // independently. Approved lists run FIFO, one complete pipeline at a time.
   const created: string[] = [];
   for (const file of files) {
     const list = await ingestList({
@@ -78,13 +75,6 @@ export async function stopVerification(listId: string) {
   await assertSignedIn();
   await stopList(listId);
   revalidatePath(`/lists/${listId}`);
-}
-
-export async function forceMtnVerification(listId: string) {
-  await assertSignedIn();
-  const result = await focusMtnList(listId);
-  revalidatePath(`/lists/${listId}`);
-  return result;
 }
 
 export async function retryFailedList(listId: string) {

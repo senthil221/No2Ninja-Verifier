@@ -98,10 +98,23 @@ by the per-window total and still reads as a burst to the provider — it
 earned a 429. Requests are paced one per interval, derived from the plan's
 own rate with a safety factor (57/10s → one every ~202ms → ~49/10s).
 
-Concurrency (default 8) exists only to absorb latency: SMTP probes take
+Concurrency (default 128) exists only to absorb latency: SMTP probes take
 ~880ms median with outliers past 7s, so serial execution ran the pipeline at
 a *tenth* of the allowance. Paced starts plus concurrency gets the rate
 without the spike.
+
+### Lists run through one global FIFO
+
+User-approved lists enter an explicit `queued` state. A Postgres advisory
+lock selects the oldest queued list, and a partial unique index guarantees
+that only one list can be in `running_mtn` or `running_n2b` at any time—even
+if two Start requests race in different app processes. That list owns the
+complete MTN → N2B pipeline; the next list starts automatically only after it
+completes, fails, or is stopped.
+
+Worker startup reconciles the database owner with BullMQ. It drains stale
+waiting/delayed MTN entries and rebuilds only the active list with stable row
+job IDs, so a process restart cannot reintroduce multi-list interleaving.
 
 A 429 pauses the whole worker for `Retry-After` and requeues without
 consuming a retry. It must never be read as "provider unreachable", which
@@ -207,6 +220,6 @@ as "the pipeline works"; several releases here were both.
 ## Known gaps
 
 - Single worker process. Fine at this volume; the limiter is per-worker, so running two would double the request rate and need moving to a shared limiter first.
-- Strict FIFO queue — a large list blocks a small one until it finishes. Deliberate: prioritisation happens by choosing when to press Start.
+- Strict list FIFO — a large approved list blocks later lists until its complete pipeline finishes. Deliberate: one list receives the full safe provider allowance at a time.
 - No role-address (`info@`, `sales@`) or disposable-domain flagging. These verify as valid but are poor cold-email targets.
 - No bounce feedback loop. Real bounce data from the sending tool would beat any verifier's verdict and is the highest-value addition left.

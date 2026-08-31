@@ -9,6 +9,7 @@ datasource db {
 
 enum ListStatus {
   pending
+  queued
   running_mtn
   running_n2b
   completed
@@ -125,6 +126,9 @@ model List {
   // spend is written for this list.
   startedById    String?
   startedBy      User?      @relation("StartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+  // When the user authorised this run. Approved lists wait FIFO here so one
+  // list owns the complete MTN -> N2B pipeline at a time.
+  queuedAt       DateTime?
   createdAt      DateTime   @default(now())
   completedAt    DateTime?
   rows           ListRow[]
@@ -132,6 +136,7 @@ model List {
   creditEntries  CreditLedger[]
 
   @@index([clientId])
+  @@index([status, queuedAt])
 }
 
 model ListRow {

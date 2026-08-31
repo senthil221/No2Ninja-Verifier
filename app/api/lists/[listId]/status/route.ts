@@ -59,6 +59,32 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
       }),
     ]);
 
+  const queue =
+    list.status === "queued"
+      ? await Promise.all([
+          list.queuedAt
+            ? prisma.list.count({
+                where: {
+                  status: "queued",
+                  OR: [
+                    { queuedAt: { lt: list.queuedAt } },
+                    { queuedAt: list.queuedAt, createdAt: { lt: list.createdAt } },
+                    {
+                      queuedAt: list.queuedAt,
+                      createdAt: list.createdAt,
+                      id: { lt: list.id },
+                    },
+                  ],
+                },
+              })
+            : Promise.resolve(0),
+          prisma.list.findFirst({
+            where: { status: { in: ["running_mtn", "running_n2b"] } },
+            select: { id: true, name: true, status: true },
+          }),
+        ]).then(([ahead, activeList]) => ({ position: ahead + 1, activeList }))
+      : null;
+
   function toCountMap<T extends { _count: number }>(groups: T[], keyOf: (g: T) => string | null) {
     return Object.fromEntries(groups.map((g) => [keyOf(g) ?? "unknown", g._count]));
   }
@@ -107,6 +133,7 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
     bySource,
     n2bCreditsSpent: creditSpend._sum.amount ?? 0,
     throughput: { perSecond: Number(perSecond.toFixed(2)), etaSeconds },
+    queue,
     // The review step's decision data: what the paid pass would cost, and
     // the reason behind each row it would cover.
     pendingN2b,

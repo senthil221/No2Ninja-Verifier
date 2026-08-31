@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 const ACTIVE_LABEL: Record<string, string> = {
   pending: "Awaiting start",
+  queued: "Queued",
   running_mtn: "Ninja pass",
   running_n2b: "No2Bounce pass",
   failed: "Stopped",
@@ -22,10 +23,9 @@ export default async function HomePage() {
     prisma.creditLedger.aggregate({ _sum: { amount: true }, where: { provider: "n2b" } }),
     prisma.listRow.count({ where: { finalSource: "cache" } }),
     prisma.listRow.count(),
-    // Anything in flight or waiting on a person -- with several lists running
-    // at once, this is the only place that shows them together.
+    // Anything in flight, queued, or waiting on a person.
     prisma.list.findMany({
-      where: { status: { in: ["pending", "running_mtn", "running_n2b", "failed"] } },
+      where: { status: { in: ["pending", "queued", "running_mtn", "running_n2b", "failed"] } },
       include: { client: true },
       orderBy: { createdAt: "desc" },
       take: 12,
