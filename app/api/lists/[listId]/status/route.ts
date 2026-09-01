@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireUserForApi } from "@/lib/require-user";
 import { config } from "@/lib/config";
+import { buildVerificationAccounting } from "@/lib/progress-accounting";
 
 export async function GET(_req: Request, { params }: { params: { listId: string } }) {
   const { response } = await requireUserForApi();
@@ -19,6 +20,7 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
     parkedReasons,
     fullBreakdown,
     checkedLastMinute,
+    liveMtnChecked,
   ] = await Promise.all([
     prisma.listRow.groupBy({ by: ["stage"], where: { listId: list.id }, _count: true }),
     prisma.listRow.groupBy({
@@ -57,6 +59,12 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
       prisma.listRow.count({
         where: { listId: list.id, mtnCheckedAt: { gte: new Date(Date.now() - 60_000) } },
       }),
+      // This is the number of actual MTN provider calls completed. It is
+      // intentionally different from bySource.mtn, which counts only rows
+      // where MTN supplied the final answer.
+      prisma.listRow.count({
+        where: { listId: list.id, mtnCheckedAt: { not: null } },
+      }),
     ]);
 
   const queue =
@@ -94,6 +102,11 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
   const bySource = toCountMap(sourceGroups, (g) => g.finalSource);
   const resolved = Object.values(byFinalStatus).reduce((a: number, b) => a + (b as number), 0);
   const pendingN2b = stageCounts.needs_n2b ?? 0;
+  const mtnAccounting = buildVerificationAccounting({
+    liveMtnChecked,
+    stageCounts,
+    bySource,
+  });
 
   const stillToCheck = stageCounts.pending ?? 0;
   const perSecond = checkedLastMinute / 60;
@@ -131,6 +144,7 @@ export async function GET(_req: Request, { params }: { params: { listId: string 
     stageCounts,
     byFinalStatus,
     bySource,
+    mtnAccounting,
     n2bCreditsSpent: creditSpend._sum.amount ?? 0,
     throughput: { perSecond: Number(perSecond.toFixed(2)), etaSeconds },
     queue,

@@ -725,6 +725,22 @@ a > button {
   font-weight: 650;
 }
 
+.mtn-accounting {
+  margin: calc(var(--s3) * -0.35) 0 var(--s3);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-sunken);
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.mtn-accounting strong,
+.mtn-accounting .num {
+  color: var(--ink);
+}
+
 .running-actions {
   display: flex;
   align-items: center;

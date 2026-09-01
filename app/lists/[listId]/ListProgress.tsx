@@ -8,6 +8,7 @@ import {
   stopVerification,
 } from "@/app/actions";
 import { shouldPollListStatus } from "@/lib/list-scheduler-policy";
+import { verificationPhase, type VerificationAccounting } from "@/lib/progress-accounting";
 
 interface StatusPayload {
   status: string;
@@ -21,6 +22,7 @@ interface StatusPayload {
   stageCounts: Record<string, number>;
   byFinalStatus: Record<string, number>;
   bySource: Record<string, number>;
+  mtnAccounting: VerificationAccounting;
   n2bCreditsSpent: number;
   throughput: { perSecond: number; etaSeconds: number | null };
   pendingN2b: number;
@@ -89,25 +91,14 @@ const STEPS = [
   { key: "done", label: "Done" },
 ];
 
-function stepIndexFor(status: string): number {
-  switch (status) {
-    case "pending":
-      return 0;
-    case "queued":
-      return 1;
-    case "running_mtn":
-      return 1;
-    case "running_n2b":
-      return 2;
-    case "completed":
-      return 3;
-    default:
-      return 1;
-  }
+function stepIndexFor(status: string, accounting: VerificationAccounting): number {
+  return { preflight: 0, mtn: 1, n2b: 2, done: 3 }[
+    verificationPhase(status, accounting)
+  ];
 }
 
-function Stepper({ status }: { status: string }) {
-  const current = stepIndexFor(status);
+function Stepper({ status, accounting }: { status: string; accounting: VerificationAccounting }) {
+  const current = stepIndexFor(status, accounting);
   const failed = status === "failed" || status === "stopped";
 
   return (
@@ -245,7 +236,7 @@ export default function ListProgress({ listId }: { listId: string }) {
 
   return (
     <div>
-      <Stepper status={data.status} />
+      <Stepper status={data.status} accounting={data.mtnAccounting} />
 
       {/* ---------- Step 1: pre-flight ---------- */}
       {data.status === "pending" && (
@@ -359,6 +350,24 @@ export default function ListProgress({ listId }: { listId: string }) {
             ))}
           </div>
 
+          <p className="mtn-accounting">
+            <strong>MTN pass:</strong>{" "}
+            <span className="num">{data.mtnAccounting.checkedByMtn}</span> checked live +{" "}
+            <span className="num">{data.mtnAccounting.reusedFromCacheOrDomain}</span> reused from
+            cache/domain
+            {data.mtnAccounting.waitingForMtn > 0 ? (
+              <>
+                {" "}· <span className="num">{data.mtnAccounting.waitingForMtn}</span> waiting for MTN
+              </>
+            ) : (
+              <>
+                {" "}· <span className="num">{data.mtnAccounting.resolvedByMtn}</span> resolved by MTN
+                {" "}· <span className="num">{data.mtnAccounting.escalatedToN2b}</span> escalated to
+                No2Bounce
+              </>
+            )}
+          </p>
+
           <div className="result-cards">
             {STATUS_ORDER.map((s) => (
               <div key={s} className={`result-card result-${s}`}>
@@ -388,13 +397,20 @@ export default function ListProgress({ listId }: { listId: string }) {
 
           <div className="source-line">
             <span>
-              <span className="num">{data.bySource.cache ?? 0}</span> from cache
+              <span className="num">{data.mtnAccounting.reusedFromCacheOrDomain}</span> reused from
+              cache/domain
             </span>
             <span>
-              <span className="num">{data.bySource.mtn ?? 0}</span> from Ninja
+              <span className="num">{data.mtnAccounting.checkedByMtn}</span> checked by Ninja
             </span>
             <span>
-              <span className="num">{data.bySource.n2b ?? 0}</span> from No2Bounce
+              <span className="num">{data.mtnAccounting.resolvedByMtn}</span> resolved by Ninja
+            </span>
+            <span>
+              <span className="num">{data.mtnAccounting.escalatedToN2b}</span> escalated to No2Bounce
+            </span>
+            <span>
+              <span className="num">{data.mtnAccounting.resolvedByN2b}</span> resolved by No2Bounce
             </span>
             <span>
               <span className="num">{data.n2bCreditsSpent}</span> credits used
