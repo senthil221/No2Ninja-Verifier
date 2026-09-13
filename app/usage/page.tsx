@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/require-user";
+import ResetPasswordButton from "./ResetPasswordButton";
 
 export const dynamic = "force-dynamic";
 
@@ -111,6 +112,7 @@ export default async function UsagePage() {
                 <th>Email</th>
                 <th>Role</th>
                 <th className="right">Last sign-in</th>
+                <th className="right">Password</th>
               </tr>
             </thead>
             <tbody>
@@ -124,6 +126,9 @@ export default async function UsagePage() {
                   </td>
                   <td className="meta right">
                     {u.lastLoginAt ? u.lastLoginAt.toLocaleDateString() : "never"}
+                  </td>
+                  <td className="right">
+                    <ResetPasswordButton userId={u.id} email={u.email} />
                   </td>
                 </tr>
               ))}

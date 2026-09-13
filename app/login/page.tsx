@@ -77,6 +77,9 @@ export default async function LoginPage({
         <p className="meta" style={{ textAlign: "center", marginTop: 12 }}>
           Need an account? <Link href="/signup">Create one</Link>
         </p>
+        <p className="meta" style={{ textAlign: "center", marginTop: 4 }}>
+          Forgot your password? Ask an admin to send you a reset link.
+        </p>
       </form>
     </div>
   );

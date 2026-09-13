@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hashPassword, verifyPassword, normalizeEmail } from "./auth";
+import { hashPassword, verifyPassword, normalizeEmail, resetPassword } from "./auth";
 
 test("accepts the correct password and rejects everything else", async () => {
   const stored = await hashPassword("correct horse battery staple");
@@ -38,4 +38,15 @@ test("malformed stored values are rejected rather than throwing", async () => {
 
 test("emails are matched case-insensitively", () => {
   assert.equal(normalizeEmail("  Senthil@Example.COM "), "senthil@example.com");
+});
+
+test("resetPassword rejects a short password before it ever looks up the token", async () => {
+  // The length check has to come first: a fake token here would otherwise
+  // hit the database and this test would need one to run at all. If this
+  // ever throws a Prisma connection error instead of the length message,
+  // the check was moved after the lookup by mistake.
+  await assert.rejects(
+    () => resetPassword("does-not-matter", "short"),
+    /at least 12 characters/
+  );
 });

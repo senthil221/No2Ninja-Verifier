@@ -932,6 +932,36 @@ a > button {
   color: #9c2e25;
 }
 
+/* ---------- Reset link reveal ---------- */
+
+.reset-reveal {
+  text-align: left;
+  max-width: 340px;
+  margin-left: auto;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: var(--s2) var(--s3);
+}
+
+.reset-link {
+  display: block;
+  font-size: 11px;
+  word-break: break-all;
+  white-space: normal;
+  margin-bottom: var(--s2);
+}
+
+.reset-reveal-actions {
+  display: flex;
+  gap: var(--s2);
+  margin-bottom: var(--s1);
+}
+
+.reset-error {
+  color: var(--invalid);
+}
+
 .back-link {
   display: inline-block;
   color: var(--ink-muted);

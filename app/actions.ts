@@ -11,13 +11,20 @@ import {
   startVerification,
   stopList,
 } from "@/lib/pipeline";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, createPasswordResetToken } from "@/lib/auth";
+import { config } from "@/lib/config";
 
 // Server actions are POST endpoints in their own right -- a page guard does
 // not cover them, so each one asserts the session itself.
 async function assertSignedIn() {
   const user = await getSessionUser();
   if (!user) throw new Error("Not signed in");
+  return user;
+}
+
+async function assertAdmin() {
+  const user = await assertSignedIn();
+  if (user.role !== "admin") throw new Error("Admin only");
   return user;
 }
 
@@ -94,4 +101,16 @@ export async function removeList(listId: string) {
   await deleteList(listId);
   revalidatePath(`/clients/${list.clientId}`);
   redirect(`/clients/${list.clientId}`);
+}
+
+// Generates a one-time reset link and returns it to the caller directly --
+// unlike the other actions here, there is no page to redirect back to that
+// could show it, so it comes straight back to the admin's browser to copy.
+// Admin-only: this is the one action in the app that reaches into another
+// person's account.
+export async function requestPasswordReset(userId: string): Promise<string> {
+  const admin = await assertAdmin();
+  const token = await createPasswordResetToken(userId, admin.id);
+  const base = config.publicUrl || "";
+  return `${base.replace(/\/$/, "")}/reset-password/${token}`;
 }
